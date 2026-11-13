@@ -1,0 +1,91 @@
+{
+ "format": "DEPP-INDICE-1",
+ "updatedAt": "2026-11-13T12:05:00-03:00",
+ "lastValid": "2026-11-13",
+ "lastRun": {
+  "cut": "2026-11-13",
+  "at": "2026-11-13T12:05:00-03:00",
+  "status": "valido",
+  "result": "publicado"
+ },
+ "cuts": [
+  {
+   "cut": "2026-10-30",
+   "status": "valido",
+   "previousCut": null,
+   "summary": {
+    "ingresos": 4,
+    "entregas": 3,
+    "avances": 0,
+    "abiertos": 5,
+    "vencidos": 0,
+    "bloqueados": 0,
+    "apoyos": 0,
+    "proximos": 0
+   },
+   "incidents": {
+    "bloqueantes": 0,
+    "observaciones": 0
+   },
+   "capturedAt": "2026-10-30T12:00:40-03:00",
+   "files": {
+    "corte": "cortes/2026-10-30/Corte_DEPP_2026-10-30.json",
+    "manifiesto": "cortes/2026-10-30/Manifiesto_DEPP_2026-10-30.json",
+    "minuta": "cortes/2026-10-30/Minuta_DEPP_2026-10-30.docx",
+    "detalle": "cortes/2026-10-30/Detalle_DEPP_2026-10-30.xlsx"
+   }
+  },
+  {
+   "cut": "2026-11-06",
+   "status": "valido",
+   "previousCut": "2026-10-30",
+   "summary": {
+    "ingresos": 5,
+    "entregas": 2,
+    "avances": 3,
+    "abiertos": 8,
+    "vencidos": 0,
+    "bloqueados": 0,
+    "apoyos": 0,
+    "proximos": 4
+   },
+   "incidents": {
+    "bloqueantes": 0,
+    "observaciones": 0
+   },
+   "capturedAt": "2026-11-06T12:00:40-03:00",
+   "files": {
+    "corte": "cortes/2026-11-06/Corte_DEPP_2026-11-06.json",
+    "manifiesto": "cortes/2026-11-06/Manifiesto_DEPP_2026-11-06.json",
+    "minuta": "cortes/2026-11-06/Minuta_DEPP_2026-11-06.docx",
+    "detalle": "cortes/2026-11-06/Detalle_DEPP_2026-11-06.xlsx"
+   }
+  },
+  {
+   "cut": "2026-11-13",
+   "status": "valido",
+   "previousCut": "2026-11-06",
+   "summary": {
+    "ingresos": 7,
+    "entregas": 4,
+    "avances": 6,
+    "abiertos": 10,
+    "vencidos": 1,
+    "bloqueados": 2,
+    "apoyos": 3,
+    "proximos": 8
+   },
+   "incidents": {
+    "bloqueantes": 0,
+    "observaciones": 0
+   },
+   "capturedAt": "2026-11-13T12:00:40-03:00",
+   "files": {
+    "corte": "cortes/2026-11-13/Corte_DEPP_2026-11-13.json",
+    "manifiesto": "cortes/2026-11-13/Manifiesto_DEPP_2026-11-13.json",
+    "minuta": "cortes/2026-11-13/Minuta_DEPP_2026-11-13.docx",
+    "detalle": "cortes/2026-11-13/Detalle_DEPP_2026-11-13.xlsx"
+   }
+  }
+ ]
+}

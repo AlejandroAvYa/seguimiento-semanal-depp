@@ -1,0 +1,40 @@
+{
+  "areas": [
+    {"tab":"Análisis Estad. y Territorial","prefix":"AET","table":"Carga_AET","name":"Unidad de Análisis Estadístico y Territorial","products":"Informes STOP, reportes delictuales, diagnósticos territoriales, mapas, visores, tabulados y bases de datos."},
+    {"tab":"Encuestas y Estudios","prefix":"EE","table":"Carga_EE","name":"Unidad de Encuestas y Estudios","products":"Resultados y materiales ENUSC, Consulta de Capacidades de Gestión Municipal, estudios, fichas metodológicas e índices."},
+    {"tab":"Evaluación de Políticas","prefix":"EPP","table":"Carga_EPP","name":"Unidad de Evaluación de Políticas Públicas","products":"Evaluaciones, diseño y reformulación de programas, seguimiento de indicadores, síntesis de evidencia y asistencias técnicas."},
+    {"tab":"CPHDV","prefix":"CPHDV","table":"Carga_CPHDV","name":"Centro para la Prevención de Homicidios y Delitos Violentos","products":"Caracterizaciones semanales de víctimas de homicidio, informes semestrales y anuales, series y minutas sobre delitos violentos."}
+  ],
+  "books": [
+    {"file":"Seguimiento_Departamento_Estudios.xlsx","name":"Departamento de Estudios y Análisis de Seguridad Pública","prefixes":["AET","EE"]},
+    {"file":"Seguimiento_Evaluacion_Politicas_Publicas.xlsx","name":"Unidad de Evaluación de Políticas Públicas","prefixes":["EPP"]},
+    {"file":"Seguimiento_CPHDV.xlsx","name":"Centro para la Prevención de Homicidios y Delitos Violentos","prefixes":["CPHDV"]}
+  ],
+  "fields": [
+    ["number","N°",54],
+    ["received","Fecha de ingreso",105],
+    ["request","Requerimiento",205],
+    ["product","Producto comprometido",200],
+    ["kind","Tipo de encargo",118],
+    ["requester","Requirente",190],
+    ["owner","Responsable",134],
+    ["due","Plazo acordado",106],
+    ["state","Estado",110],
+    ["delivered","Fecha de entrega efectiva",119],
+    ["notes","Observaciones generales",260]
+  ],
+  "kinds":["Programado","A solicitud","Contingencia"],
+  "requesters":["Gabinete Ministerial","Gabinete SPD","Subsecretaría de Seguridad Pública","SEREMI","Comunicaciones","Transparencia","DTI","DJUR","DAFP","DTPT","DEPP (INTERNO)","GORE","Municipio"],
+  "states":["Pendiente","En curso","En revisión","Bloqueado","Entregado","Cancelado"],
+  "cut":"2026-11-13",
+  "examples":[
+    ["AET","1","2026-11-09","Monitorear la situación delictual semanal","Informe semanal STOP","Programado","Gabinete SPD","Equipo territorial","2026-11-11","Entregado","2026-11-11",""],
+    ["AET","2","2026-11-10","Preparar antecedentes para una actividad territorial","Mapa delictual y minuta comunal","Contingencia","Gabinete Ministerial","Equipo territorial","2026-11-13","En revisión","","Cartografía consolidada. Minuta en revisión."],
+    ["EE","1","2026-11-09","Consolidar resultados de capacidades municipales","Informe de la Consulta de Capacidades de Gestión Municipal","Programado","DEPP (INTERNO)","Equipo de encuestas","2026-11-18","En curso","","Tabulados listos. Sigue revisión del informe."],
+    ["EE","2","2026-11-04","Preparar materiales para difusión de resultados","Ficha de resultados ENUSC","Programado","Comunicaciones","Equipo de encuestas","2026-11-10","Entregado","2026-11-12",""],
+    ["EPP","1","2026-11-09","Revisar el diseño de una intervención","Minuta de evaluación de diseño","A solicitud","DTPT","Equipo de evaluación","2026-11-11","Bloqueado","","Requiere el diseño actualizado. Gabinete debe solicitarlo a la contraparte."],
+    ["EPP","2","2026-11-10","Actualizar el seguimiento de un programa","Reporte de indicadores","Programado","DEPP (INTERNO)","Equipo de evaluación","2026-11-17","En curso","","El equipo del programa confirmó el nuevo plazo."],
+    ["CPHDV","1","2026-11-09","Actualizar el seguimiento semanal de homicidios","Caracterización semanal de víctimas de homicidio","Programado","Gabinete SPD","Equipo CPHDV","2026-11-09","Entregado","2026-11-09",""],
+    ["CPHDV","2","2026-11-10","Preparar antecedentes sobre un delito violento","Minuta temática sobre secuestros","A solicitud","Gabinete SPD","Equipo CPHDV","2026-11-18","En curso","","Antecedentes integrados para la revisión técnica."]
+  ]
+}

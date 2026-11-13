@@ -1,0 +1,11 @@
+{
+  "_nota": "Copiar fuera del repositorio como graph.json. El secreto va en la variable de entorno indicada, nunca en este archivo.",
+  "tenant_id": "00000000-0000-0000-0000-000000000000",
+  "client_id": "00000000-0000-0000-0000-000000000000",
+  "secret_env": "DEPP_GRAPH_SECRET",
+  "files": [
+    {"file": "Seguimiento_Departamento_Estudios.xlsx", "drive_id": "b!REEMPLAZAR", "item_id": "REEMPLAZAR"},
+    {"file": "Seguimiento_Evaluacion_Politicas_Publicas.xlsx", "drive_id": "b!REEMPLAZAR", "item_id": "REEMPLAZAR"},
+    {"file": "Seguimiento_CPHDV.xlsx", "drive_id": "b!REEMPLAZAR", "item_id": "REEMPLAZAR"}
+  ]
+}

@@ -1,0 +1,20 @@
+# Datos reales: nunca al repositorio
+datos/
+Capturas/
+Salidas/
+**/Capturas_reales/
+*.real.json
+graph.json
+.env
+*.pfx
+*.pem
+registro_ejecuciones.log
+
+# Entorno
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+~$*.xlsx
+~$*.docx
+.DS_Store

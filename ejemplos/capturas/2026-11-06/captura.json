@@ -1,0 +1,20 @@
+{
+ "scheduledAt": "2026-11-06T12:00:00-03:00",
+ "capturedAt": "2026-11-06T12:00:40-03:00",
+ "source": "Ejemplo ficticio (Power Automate)",
+ "verified": true,
+ "files": [
+  {
+   "file": "Seguimiento_CPHDV.xlsx",
+   "etag": "ficticio"
+  },
+  {
+   "file": "Seguimiento_Departamento_Estudios.xlsx",
+   "etag": "ficticio"
+  },
+  {
+   "file": "Seguimiento_Evaluacion_Politicas_Publicas.xlsx",
+   "etag": "ficticio"
+  }
+ ]
+}

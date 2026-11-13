@@ -1,0 +1,10 @@
+{
+  "capturedAt": "2026-11-13T15:00:41Z",
+  "source": "Power Automate · DEPP - Captura semanal",
+  "verified": false,
+  "files": [
+    {"file": "Seguimiento_Departamento_Estudios.xlsx", "etag": "\"{…},12\"", "modified": "2026-11-13T14:52:10Z"},
+    {"file": "Seguimiento_Evaluacion_Politicas_Publicas.xlsx", "etag": "\"{…},8\"", "modified": "2026-11-13T13:40:02Z"},
+    {"file": "Seguimiento_CPHDV.xlsx", "etag": "\"{…},5\"", "modified": "2026-11-12T19:11:55Z"}
+  ]
+}

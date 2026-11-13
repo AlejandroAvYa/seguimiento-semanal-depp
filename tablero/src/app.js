@@ -1,0 +1,525 @@
+/* app.js · Interfaz del tablero de seguimiento semanal DEPP. */
+(function () {
+  "use strict";
+  const M = DEPPMotor;
+  const modelo = JSON.parse(document.getElementById("modelo").textContent);
+  const embebidos = JSON.parse(document.getElementById("datos-cortes").textContent);
+  const $ = id => document.getElementById(id);
+  const AREAS = new Map(modelo.areas.map(a => [a.prefix, a]));
+  const ESTADOS_TXT = { valido: "Válido", valido_con_observaciones: "Válido con observaciones", en_revision: "En revisión", manual: "Carga manual sin publicar" };
+  const VISTAS = {
+    resumen: ["Resumen del corte", "Qué se entregó, qué avanzó y qué requiere atención"],
+    compromisos: ["Compromisos", "Registro consolidado de los cuatro equipos, con filtros y ficha de detalle"],
+    minuta: ["Minuta semanal", "Generada con el mismo corte que alimenta el tablero"],
+    calidad: ["Calidad y carga", "Estado de la actualización, incidencias, historial y carga manual"]
+  };
+  const FILTROS_VACIOS = { area: "", state: "", requester: "", view: "all", q: "" };
+
+  const st = {
+    raw: {},          // corte → consolidado tal como se publicó o se cargó
+    norm: {},         // corte → consolidado validado
+    manual: new Set(),
+    index: null,
+    origin: null,     // procesador | demo | http | manual
+    cut: null,
+    view: "resumen",
+    filters: Object.assign({}, FILTROS_VACIOS),
+    full: false,
+    cache: {}
+  };
+
+  // ------------------------------------------------------------------ utilidades
+  const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const ft = M.fechaTexto;
+  const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+  const fechaLarga = d => { const [y, m, dd] = d.split("-").map(Number); return dd + " de " + MESES[m - 1] + " de " + y; };
+  const diasEntre = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
+  const claseEstado = s => "b-" + String(s).replace(/ /g, "-");
+  function hoySantiago() {
+    const p = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Santiago", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date());
+    const g = n => p.find(x => x.type === n).value;
+    return { dia: g("year") + "-" + g("month") + "-" + g("day"), hora: Number(g("hour")) * 60 + Number(g("minute")) };
+  }
+  function corteEsperado() {
+    const h = hoySantiago();
+    let v = M.viernesDeCorte(h.dia);
+    if (v === h.dia && h.hora < 12 * 60 + 45) v = M.desplazar(v, -7);
+    return v;
+  }
+  function momentoTexto(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d)) return iso;
+    const p = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Santiago", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(d);
+    const g = n => p.find(x => x.type === n).value;
+    return g("day") + "/" + g("month") + "/" + g("year") + " " + g("hour") + ":" + g("minute");
+  }
+  function descargar(blob, nombre) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = nombre; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+  function analisis() {
+    if (!st.cut) return null;
+    if (!st.cache[st.cut]) st.cache[st.cut] = M.analizar(modelo, st.norm[st.cut]);
+    return st.cache[st.cut];
+  }
+  function estadoDe(cut) { return st.manual.has(cut) ? "manual" : (st.norm[cut]?.status || "valido"); }
+  function cortesOrdenados() { return Object.keys(st.norm).sort(); }
+
+  // ------------------------------------------------------------------ carga de datos
+  function agregarCorte(raw, manual) {
+    const norm = M.leerCorte(modelo, raw);
+    st.raw[norm.cut] = raw;
+    st.norm[norm.cut] = norm;
+    delete st.cache[norm.cut];
+    if (manual) st.manual.add(norm.cut); else st.manual.delete(norm.cut);
+    return norm.cut;
+  }
+  function cargarEmbebidos(datos) {
+    st.index = datos.index || null;
+    st.origin = datos.origin || "procesador";
+    for (const raw of Object.values(datos.cuts || {})) {
+      try { agregarCorte(raw, false); } catch (e) { console.warn(e); }
+    }
+    st.cut = (st.index && st.index.lastValid && st.norm[st.index.lastValid]) ? st.index.lastValid : cortesOrdenados().slice(-1)[0] || null;
+  }
+  async function cargarRemoto() {
+    // Tablero publicado junto a las salidas (servidor institucional con autenticación).
+    try {
+      const r = await fetch("indice.json", { cache: "no-store", credentials: "same-origin" });
+      if (!r.ok) return false;
+      const indice = await r.json();
+      const cortes = {};
+      await Promise.all(indice.cuts.map(async c => {
+        const rc = await fetch(c.files.corte, { cache: "no-store", credentials: "same-origin" });
+        if (rc.ok) cortes[c.cut] = await rc.json();
+      }));
+      cargarEmbebidos({ index: indice, cuts: cortes, origin: "http" });
+      return true;
+    } catch (e) { return false; }
+  }
+
+  // ------------------------------------------------------------------ marco
+  function render() {
+    for (const b of document.querySelectorAll(".nav__item")) b.setAttribute("aria-current", b.dataset.view === st.view ? "page" : "false");
+    $("view-title").textContent = VISTAS[st.view][0];
+    $("view-sub").textContent = VISTAS[st.view][1];
+    renderTopbar();
+    renderBanners();
+    const page = $("page");
+    if (!st.cut) { page.innerHTML = vistaInicio(); enlazarInicio(); return; }
+    const a = analisis();
+    if (st.view === "resumen") page.innerHTML = vistaResumen(a);
+    else if (st.view === "compromisos") page.innerHTML = vistaCompromisos(a);
+    else if (st.view === "minuta") page.innerHTML = vistaMinuta();
+    else page.innerHTML = vistaCalidad(a);
+    enlazarVista();
+  }
+  function renderTopbar() {
+    const sel = $("cut-select");
+    const cortes = cortesOrdenados();
+    $("cutpick").hidden = !cortes.length;
+    sel.innerHTML = cortes.slice().reverse().map(c =>
+      '<option value="' + c + '"' + (c === st.cut ? " selected" : "") + ">vie " + ft(c) + " · " + esc(ESTADOS_TXT[estadoDe(c)]) + "</option>").join("");
+    $("cut-dot").className = "dot " + (st.cut ? estadoDe(st.cut) : "");
+    const meta = $("update-meta");
+    if (st.index && st.index.lastRun) {
+      meta.hidden = false;
+      const lr = st.index.lastRun;
+      $("update-label").textContent = momentoTexto(lr.at) + " · " + (lr.status === "fallido" ? "falló" : ESTADOS_TXT[lr.status] || lr.status);
+    } else if (st.origin === "demo") {
+      meta.hidden = false; $("update-label").textContent = "Datos ficticios";
+    } else meta.hidden = true;
+    const n = st.cut ? (st.norm[st.cut].incidents || []).length : 0;
+    $("nav-inc").hidden = !n; $("nav-inc").textContent = n;
+  }
+  function renderBanners() {
+    const out = [];
+    const ban = (tipo, html) => out.push('<div class="banner ' + tipo + '">' + html + "</div>");
+    if (st.origin === "demo") ban("info", "<strong>Demostración con datos ficticios.</strong> Los registros, nombres y cifras son ilustrativos. El tablero operativo se abre desde la carpeta institucional de salidas.");
+    if (st.cut && st.manual.has(st.cut)) ban("info", "<strong>Carga manual sin publicar.</strong> Este corte se armó en el navegador con los Excel seleccionados. Puedes guardarlo como consolidado desde «Calidad y carga».");
+    const lr = st.index && st.index.lastRun;
+    if (lr && lr.status === "fallido") ban("bad", "<strong>La actualización del corte del " + ft(lr.cut) + " falló</strong> (" + esc(momentoTexto(lr.at)) + "): " + esc(lr.result) + " Se mantiene el último corte válido.");
+    else if (lr && lr.status === "en_revision" && st.cut !== lr.cut) ban("warn", "<strong>El corte del " + ft(lr.cut) + " quedó en revisión.</strong> Se muestra el último corte válido (" + ft(st.index.lastValid || "") + "). Revisa las incidencias en «Calidad y carga».");
+    if (st.cut && st.norm[st.cut].status === "en_revision") {
+      const bloq = (st.norm[st.cut].incidents || []).filter(i => i.level === "bloqueante");
+      ban("bad", "<strong>Corte en revisión: cifras preliminares.</strong> " + esc(bloq.slice(0, 2).map(i => i.message).join(" ")) + (bloq.length > 2 ? " (+" + (bloq.length - 2) + " más)" : ""));
+    }
+    if (st.index && (st.origin === "procesador" || st.origin === "http")) {
+      const esperado = corteEsperado();
+      if (!st.index.cuts.some(c => c.cut === esperado) && (!lr || lr.cut !== esperado)) {
+        ban("warn", "<strong>Corte del viernes " + ft(esperado) + " pendiente.</strong> La actualización programada a las 12:00 aún no se publica. Se muestra el corte del " + ft(st.index.lastValid || st.cut) + ".");
+      }
+    }
+    $("banners").innerHTML = out.join("");
+  }
+
+  // ------------------------------------------------------------------ vista inicial sin datos
+  function vistaInicio() {
+    return '<div class="start"><div class="page__eyebrow">Seguimiento semanal DEPP</div><h1>No hay cortes cargados</h1>'
+      + "<p>El tablero operativo se abre desde la carpeta de salidas, con el último corte publicado. Para trabajar sin la automatización, carga los tres Excel de los equipos o abre un consolidado.</p>"
+      + '<div class="toolbar" style="justify-content:center;align-items:end;margin-top:18px"><label class="field" style="text-align:left">Fecha de corte (viernes)<input type="date" id="manual-cut" value="' + corteEsperado() + '"></label><button class="btn primary" data-act="xlsx">Cargar los Excel de los equipos</button><button class="btn" data-act="json">Abrir consolidado (.json)</button></div></div>';
+  }
+  function enlazarInicio() {
+    for (const b of document.querySelectorAll("[data-act]")) b.addEventListener("click", accion);
+  }
+
+  // ------------------------------------------------------------------ resumen
+  function li(f, derecha, claseDer, extra) {
+    return '<li><button class="li" data-open="' + esc(f.id) + '"><span class="chip area" title="' + esc(AREAS.get(f.area).name) + '">' + esc(f.area) + '</span><span class="li__main"><span class="li__t" style="display:block">'
+      + esc(f.product) + '</span><span class="li__s" style="display:block">' + esc(extra) + '</span></span><span class="li__r ' + (claseDer || "") + '">' + esc(derecha) + "</span></button></li>";
+  }
+  function vistaResumen(a) {
+    const s = a.summary;
+    const corte = st.norm[st.cut];
+    const alertas = a.rows.filter(f => f.active && (f.blocked || f.late)).sort((x, y) => Number(y.blocked) - Number(x.blocked) || (x.due || "9").localeCompare(y.due || "9"));
+    const solicitudes = a.rows.filter(f => f.support).sort((x, y) => Number(y.decision) - Number(x.decision));
+    const proximos = a.rows.filter(f => f.upcoming).sort((x, y) => x.due.localeCompare(y.due));
+    const movs = M.movimientos(modelo, corte);
+    const periodo = a.comparing ? "Del viernes " + ft(a.from) + " a las 12:00 al viernes " + ft(a.cut) + " a las 12:00" : "Corte inicial · línea base desde el " + ft(a.from);
+    const hstat = (n, l, sub, vista, hot) => '<button class="hstat' + (hot && n ? " is-hot" : "") + '" data-preset="' + vista + '"><div class="hstat__n tnum">' + n + '</div><div class="hstat__l">' + l + '</div><div class="hstat__s">' + sub + "</div></button>";
+    let html = '<section class="hero" aria-label="Cifras del corte"><div class="hero__top"><div><div class="hero__k">Corte semanal DEPP · viernes ' + ft(a.cut) + " · 12:00</div>"
+      + '<div class="hero__t">Estado de los compromisos al ' + fechaLarga(a.cut) + '</div><div class="hero__meta">' + periodo + "</div></div>"
+      + '<div class="hero__side"><b class="tnum">' + s.abiertos + "</b> compromisos abiertos · <b class=\"tnum\">" + s.registros + "</b> registrados<br>" + modelo.areas.length + " equipos · estado: " + esc(ESTADOS_TXT[estadoDe(st.cut)]) + "</div></div>"
+      + '<div class="hero__stats">'
+      + hstat(s.entregas, "Entregados", s.entregasFueraPlazo ? M.plural(s.entregasFueraPlazo, "fuera de plazo", "fuera de plazo") : "en el período", "entregas")
+      + hstat(s.avances, "Con avance", a.comparing ? "cambios respecto del corte anterior" : "se calcula desde el 2.º corte", "avances")
+      + hstat(s.ingresos, "Ingresos", s.ingresosTardios ? M.plural(s.ingresosTardios, "con registro tardío", "con registro tardío") : "encargos nuevos", "ingresos")
+      + hstat(alertas.length, "Atrasados o bloqueados", M.plural(s.vencidos, "vencido") + " · " + M.plural(s.bloqueados, "bloqueado"), "alertas", true)
+      + hstat(s.apoyos, "Requieren decisión o apoyo", M.plural(s.decisiones, "decisión", "decisiones") + " · " + M.plural(s.apoyos - s.decisiones, "apoyo"), "solicitudes", true)
+      + "</div></section>";
+    html += '<div class="legend" aria-hidden="true"><span><i class="s-pend"></i>Pendiente</span><span><i class="s-curso"></i>En curso</span><span><i class="s-rev"></i>En revisión</span><span><i class="s-bloq"></i>Bloqueado</span><span><i class="s-venc"></i>Vencido (abierto)</span></div>';
+    // Atención y decisiones
+    html += '<div class="grid g2">';
+    html += '<section class="card"><div class="card__head"><h2 class="card__title red" style="margin:0">Bloqueos y atrasos</h2><span class="card__sub">' + alertas.length + ' al corte</span></div><div class="card__body"><ul class="list">'
+      + (alertas.slice(0, 5).map(f => li(f, f.blocked && !f.late ? "Bloqueado" : "Vencido hace " + M.plural(diasEntre(f.due, a.cut), "día"), "red", (f.blocked && f.late ? "Bloqueado · " : "") + f.owner + " · " + f.requester)).join("") || '<li class="empty-note">Sin compromisos bloqueados ni vencidos.</li>')
+      + "</ul>" + (alertas.length > 5 ? '<button class="more" data-preset="alertas">Ver los ' + alertas.length + " →</button>" : "") + "</div></section>";
+    html += '<section class="card"><div class="card__head"><h2 class="card__title amber" style="margin:0">Decisiones y apoyos solicitados</h2><span class="card__sub">' + solicitudes.length + ' abiertos</span></div><div class="card__body"><ul class="list">'
+      + (solicitudes.slice(0, 5).map(f => '<li><button class="li" data-open="' + esc(f.id) + '"><span class="chip ' + (f.decision ? "dec" : "apo") + '">' + (f.decision ? "Decisión" : "Apoyo") + '</span><span class="li__main"><span class="li__t" style="display:block">' + esc(f.product) + '</span><span class="li__s" style="display:block">' + esc(f.notes) + '</span></span><span class="li__r">' + esc(f.area) + "</span></button></li>").join("") || '<li class="empty-note">Los equipos no registraron solicitudes a Gabinete.</li>')
+      + "</ul>" + (solicitudes.length > 5 ? '<button class="more" data-preset="solicitudes">Ver las ' + solicitudes.length + " →</button>" : "") + "</div></section>";
+    html += "</div>";
+    // Por equipo y próximos
+    html += '<div class="grid g2" style="margin-top:16px">';
+    html += '<section class="card"><div class="card__head"><h2 class="card__title" style="margin:0">Compromisos abiertos por equipo</h2><span class="card__sub">según estado al corte</span></div><div class="card__body">';
+    for (const area of modelo.areas) {
+      const propios = a.rows.filter(f => f.area === area.prefix && f.active);
+      const sa = s.porArea[area.prefix];
+      const seg = [["s-venc", propios.filter(f => f.late && !f.blocked).length, "vencidos"], ["s-bloq", propios.filter(f => f.blocked).length, "bloqueados"],
+        ["s-pend", propios.filter(f => !f.late && f.state === "Pendiente").length, "pendientes"], ["s-curso", propios.filter(f => !f.late && f.state === "En curso").length, "en curso"],
+        ["s-rev", propios.filter(f => !f.late && f.state === "En revisión").length, "en revisión"]];
+      const total = propios.length || 1;
+      html += '<button class="srow" data-area="' + area.prefix + '"><span class="srow__l">' + esc(area.name.replace(/^Unidad de |^Centro para la /, "")) + "<small>" + M.plural(sa.entregas, "entrega") + " · " + M.plural(sa.avances, "avance") + " en la semana</small></span>"
+        + '<span class="stack" role="img" aria-label="' + esc(seg.filter(x => x[1]).map(x => x[1] + " " + x[2]).join(", ") || "sin compromisos abiertos") + '">'
+        + seg.filter(x => x[1]).map(x => '<span class="' + x[0] + '" style="width:' + (100 * x[1] / total) + '%">' + x[1] + "</span>").join("") + "</span>"
+        + '<span class="srow__n"><b class="tnum">' + propios.length + "</b>abiertos</span></button>";
+    }
+    html += "</div></section>";
+    html += '<section class="card"><div class="card__head"><h2 class="card__title" style="margin:0">Próximos vencimientos</h2><span class="card__sub">' + ft(a.cut) + " al " + ft(a.next) + '</span></div><div class="card__body"><ul class="list">'
+      + (proximos.slice(0, 6).map(f => li(f, f.due === a.cut ? "Hoy" : ft(f.due).slice(0, 5), "blue", f.owner + " · " + f.state)).join("") || '<li class="empty-note">Sin vencimientos de compromisos abiertos en los próximos 7 días.</li>')
+      + "</ul>" + (proximos.length > 6 ? '<button class="more" data-preset="proximos">Ver los ' + proximos.length + " →</button>" : "") + "</div></section></div>";
+    // Movimientos
+    const tipoChip = t => t.startsWith("Entrega") ? "mov-e" : t.startsWith("Ingreso") ? "mov-i" : t === "Cancelación" ? "mov-c" : "mov-a";
+    html += '<section class="card" style="margin-top:16px"><div class="card__head"><h2 class="card__title" style="margin:0">Movimientos del período</h2><span class="card__sub">' + M.plural(movs.length, "movimiento") + " en " + M.plural(a.rows.filter(f => f.movement).length, "compromiso") + '</span></div><div class="card__body"><ul class="list feed">'
+      + (movs.slice(0, 12).map(m => '<li><button class="li" data-open="' + esc(m.fila.id) + '"><span class="chip ' + tipoChip(m.tipo) + '">' + esc(m.tipo) + '</span><span class="li__main"><span class="li__t" style="display:block">' + esc(m.fila.product) + '</span><span class="li__s" style="display:block">' + esc(m.fila.id) + " · " + esc(m.cambios ? "Actualizó " + m.cambios : (m.fecha ? ft(m.fecha) : "")) + "</span></span></button></li>").join("") || '<li class="empty-note">Sin movimientos en el período.</li>')
+      + "</ul>" + (movs.length > 12 ? '<button class="more" data-preset="movement">Ver todos los movimientos →</button>' : "") + "</div></section>";
+    return html;
+  }
+
+  // ------------------------------------------------------------------ compromisos
+  const PRESETS = {
+    all: ["Todos los registros al corte", () => true],
+    movement: ["Con movimiento en el período", f => f.movement],
+    entregas: ["Entregados en el período", f => f.deliveredNow],
+    avances: ["Con avance en el período", f => f.advancedNow],
+    ingresos: ["Ingresados en el período", f => f.receivedNow],
+    abiertos: ["Compromisos abiertos", f => f.active],
+    alertas: ["Atrasados o bloqueados", f => f.active && (f.late || f.blocked)],
+    solicitudes: ["Requieren decisión o apoyo", f => f.support],
+    proximos: ["Vencen en los próximos 7 días", f => f.upcoming],
+    sinplazo: ["Abiertos sin plazo", f => f.undated]
+  };
+  function filtrar(a) {
+    const F = st.filters;
+    const q = M.plegar(F.q.trim());
+    return a.rows.filter(f => (!F.area || f.area === F.area) && (!F.state || f.state === F.state) && (!F.requester || f.requester === F.requester)
+      && PRESETS[F.view][1](f) && (!q || M.plegar([f.id, f.product, f.request, f.owner, f.requester, f.notes].join(" ")).includes(q)));
+  }
+  function movChip(f) {
+    const out = [];
+    if (f.deliveredNow) out.push('<span class="chip mov-e">Entrega</span>');
+    if (f.advancedNow) out.push('<span class="chip ' + (f.cancelledNow ? "mov-c" : "mov-a") + '">' + (f.cancelledNow ? "Cancelación" : "Avance") + "</span>");
+    if (f.receivedNow) out.push('<span class="chip mov-i">Ingreso</span>');
+    return out.join(" ");
+  }
+  function badge(f) {
+    let h = '<span class="badge ' + claseEstado(f.state) + '">' + esc(f.state) + "</span>";
+    if (f.late) h += '<span class="late">Vencido hace ' + M.plural(diasEntre(f.due, st.cut), "día") + "</span>";
+    else if (f.deliveredNow && f.deliveredLate) h += '<span class="late">Fuera de plazo</span>';
+    return h;
+  }
+  function vistaCompromisos(a) {
+    const F = st.filters;
+    const filas = filtrar(a);
+    const opt = (v, t, sel) => '<option value="' + esc(v) + '"' + (v === sel ? " selected" : "") + ">" + esc(t) + "</option>";
+    let html = '<div class="filterbar" role="search"><span class="filterbar__label">Filtros</span>'
+      + '<select class="fsel' + (F.area ? " is-set" : "") + '" data-f="area" aria-label="Equipo">' + opt("", "Todos los equipos", F.area) + modelo.areas.map(x => opt(x.prefix, x.name, F.area)).join("") + "</select>"
+      + '<select class="fsel' + (F.state ? " is-set" : "") + '" data-f="state" aria-label="Estado">' + opt("", "Todos los estados", F.state) + modelo.states.map(x => opt(x, x, F.state)).join("") + "</select>"
+      + '<select class="fsel' + (F.requester ? " is-set" : "") + '" data-f="requester" aria-label="Requirente">' + opt("", "Todos los requirentes", F.requester) + modelo.requesters.map(x => opt(x, x, F.requester)).join("") + "</select>"
+      + '<select class="fsel' + (F.view !== "all" ? " is-set" : "") + '" data-f="view" aria-label="Vista">' + Object.entries(PRESETS).map(([k, v]) => opt(k, v[0], F.view)).join("") + "</select>"
+      + '<input class="fsearch" type="search" data-f="q" value="' + esc(F.q) + '" placeholder="Buscar referencia, producto, responsable u observación" aria-label="Buscar">'
+      + '<span class="count" aria-live="polite">' + filas.length + " de " + a.rows.length + "</span>"
+      + '<button class="linkbtn" data-act="limpiar">Limpiar</button><button class="linkbtn" data-act="csv">Descargar CSV</button></div>';
+    html += '<div class="tablewrap"><table><thead><tr><th scope="col">Ref.</th><th scope="col">Producto y requerimiento</th><th scope="col">Requirente</th><th scope="col">Responsable</th><th scope="col">Plazo</th><th scope="col">Entrega</th><th scope="col">Estado</th><th scope="col">Período</th></tr></thead><tbody>';
+    html += filas.length ? filas.map(f => '<tr data-open="' + esc(f.id) + '" tabindex="0"><td class="nowrap mono">' + esc(f.id) + '</td><td><div class="cell-t">' + esc(f.product) + '</div><div class="cell-s">' + esc(f.request) + "</div></td><td>" + esc(f.requester)
+      + "</td><td>" + esc(f.owner) + '</td><td class="nowrap tnum">' + (ft(f.due) || "—") + '</td><td class="nowrap tnum">' + (ft(f.delivered) || "—") + "</td><td>" + badge(f) + "</td><td>" + movChip(f) + "</td></tr>").join("")
+      : '<tr><td colspan="8" class="empty-note">Sin registros para estos filtros.</td></tr>';
+    return html + "</tbody></table></div>";
+  }
+
+  // ------------------------------------------------------------------ ficha de detalle
+  function abrirFicha(id) {
+    const a = analisis();
+    const f = a.rows.find(x => x.id === id);
+    if (!f) return;
+    const area = AREAS.get(f.area);
+    const prev = (st.norm[st.cut].previousRows || []).find(x => x.id === id);
+    const filas = [["Equipo", area.name], ["Fecha de ingreso", ft(f.received)], ["Requerimiento", f.request], ["Producto comprometido", f.product], ["Tipo de encargo", f.kind],
+      ["Requirente", f.requester], ["Responsable", f.owner], ["Plazo acordado", ft(f.due) || "Sin plazo"], ["Estado", f.state], ["Entrega efectiva", ft(f.delivered) || "—"], ["Observaciones generales", f.notes || "—"]];
+    let html = '<div class="drawer-bg" data-close></div><aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="ficha-t"><div class="drawer__head"><div><div class="drawer__k">' + esc(f.id) + " · " + esc(area.name)
+      + '</div><div class="drawer__t" id="ficha-t">' + esc(f.product) + '</div><div style="margin-top:8px">' + badge(f) + " " + movChip(f) + (f.support ? ' <span class="chip ' + (f.decision ? "dec" : "apo") + '">' + (f.decision ? "Decisión de Gabinete" : "Apoyo de Gabinete") + "</span>" : "")
+      + '</div></div><button class="drawer__close" data-close aria-label="Cerrar ficha">×</button></div><div class="drawer__body"><dl class="dl">'
+      + filas.map(([k, v]) => "<dt>" + esc(k) + "</dt><dd>" + esc(v) + "</dd>").join("") + "</dl>";
+    if (f.held) html += '<p class="empty-note">La fila tiene un error en el Excel; se muestra la versión del corte anterior.</p>';
+    if (prev && f.changed.length) {
+      html += '<div class="sub">Cambios respecto del corte del ' + ft(st.norm[st.cut].from) + '</div><div class="diff">'
+        + f.changed.map(k => {
+          const fecha = ["due", "received", "delivered"].includes(k);
+          const v = x => (fecha ? ft(x) : x) || "(vacío)";
+          return "<div><strong>" + esc(M.ETIQUETAS_CAMBIO[k][0].toUpperCase() + M.ETIQUETAS_CAMBIO[k].slice(1)) + "</strong><span><del>" + esc(v(prev[k])) + "</del> → <ins>" + esc(v(f[k])) + "</ins></span></div>";
+        }).join("") + "</div>";
+    } else if (f.receivedNow) html += '<div class="sub">Movimiento</div><p style="font-size:13px;margin:0">Ingresó en este período' + (f.lateEntry ? " (registro tardío: la fecha de ingreso es anterior al período)." : ".") + "</p>";
+    const hist = cortesOrdenados().filter(c => c <= st.cut).map(c => [c, st.norm[c].rows.find(x => x.id === id)]).filter(x => x[1]);
+    if (hist.length > 1) {
+      html += '<div class="sub">Historial en los cortes disponibles</div><div class="hist">' + hist.map(([c, r]) => "<div><strong>" + ft(c) + "</strong> · " + esc(r.state) + (r.due ? " · plazo " + ft(r.due) : "") + (r.notes ? '<span class="cell-s" style="display:block">' + esc(r.notes) + "</span>" : "") + "</div>").join("") + "</div>";
+    }
+    html += "</div></aside>";
+    const root = $("drawer-root");
+    const previo = document.activeElement;
+    root.innerHTML = html;
+    const cerrar = () => { root.innerHTML = ""; document.removeEventListener("keydown", tecla); if (previo && previo.focus) previo.focus(); };
+    const tecla = e => { if (e.key === "Escape") cerrar(); };
+    document.addEventListener("keydown", tecla);
+    for (const el of root.querySelectorAll("[data-close]")) el.addEventListener("click", cerrar);
+    root.querySelector(".drawer__close").focus();
+  }
+
+  // ------------------------------------------------------------------ minuta
+  function minutaHTML(m) {
+    const notas = m.notes || [];
+    let h = '<article class="paper" id="paper" aria-label="Minuta semanal"><img class="plogo" src="' + document.querySelector(".sidebar__logo").src + '" alt="Subsecretaría de Prevención del Delito">'
+      + '<div class="pk">' + esc(m.kind) + "</div>" + (m.draft ? '<div class="pdraft">BORRADOR · CORTE EN REVISIÓN</div>' : "")
+      + '<div class="pt">' + esc(m.title) + '</div><div class="pr">' + esc(m.recipient) + "</div>";
+    m.sections.forEach((s, i) => {
+      h += "<h3>" + (i + 1) + ". " + esc(s.title) + "</h3>";
+      (s.paragraphs || []).forEach((p, j) => { h += "<p>" + esc(p) + (i === 0 && j === 0 ? notas.map((_, k) => "<sup>" + (k + 1) + "</sup>").join("") : "") + "</p>"; });
+      for (const g of s.groups || []) {
+        h += '<div class="pg">' + esc(g.title) + " <span>· " + esc(g.counts) + "</span></div>";
+        if (g.items.length) h += "<ul>" + g.items.map(it => "<li><strong>" + esc(it.lead) + "</strong> " + esc(it.text) + "</li>").join("") + "</ul>";
+        if (g.note) h += '<div class="pn">' + esc(g.note) + "</div>";
+      }
+      if ((s.items || []).length) h += "<ul>" + s.items.map(it => "<li><strong>" + esc(it.lead) + "</strong> " + esc(it.text) + "</li>").join("") + "</ul>";
+      if (s.note) h += '<div class="pn">' + esc(s.note) + "</div>";
+    });
+    if (notas.length) h += '<div class="pfoot">' + notas.map((n, k) => "<div><sup>" + (k + 1) + "</sup> " + esc(n) + "</div>").join("") + "</div>";
+    return h + "</article>";
+  }
+  function minutaTexto(m) {
+    const l = [m.kind, m.draft ? "BORRADOR · CORTE EN REVISIÓN" : "", m.title, m.recipient, ""].filter((x, i) => x || i === 4);
+    m.sections.forEach((s, i) => {
+      l.push((i + 1) + ". " + s.title.toUpperCase());
+      for (const p of s.paragraphs || []) l.push(p);
+      for (const g of s.groups || []) { l.push(g.title + " · " + g.counts); for (const it of g.items) l.push("• " + it.lead + " " + it.text); if (g.note) l.push("  " + g.note); }
+      for (const it of s.items || []) l.push("• " + it.lead + " " + it.text);
+      if (s.note) l.push("  " + s.note);
+      l.push("");
+    });
+    (m.notes || []).forEach((n, k) => l.push("(" + (k + 1) + ") " + n));
+    return l.join("\n");
+  }
+  function vistaMinuta() {
+    const corte = st.norm[st.cut];
+    const m = M.minuta(modelo, corte, st.full);
+    const s = m.summary;
+    let html = '<div class="toolbar no-print"><div class="seg" role="group" aria-label="Versión de la minuta"><button data-full="0" aria-pressed="' + !st.full + '">Ejecutiva (hasta 2 páginas)</button><button data-full="1" aria-pressed="' + st.full + '">Detalle completo</button></div>'
+      + '<button class="btn primary" data-act="word">Descargar Word</button><button class="btn" data-act="copiar">Copiar texto</button><button class="btn" data-act="imprimir">Imprimir o PDF</button>'
+      + '<span class="status-msg" id="minuta-status">Cifras: ' + s.ingresos + " ingresos · " + s.entregas + " entregas · " + s.avances + " avances · " + s.abiertos + " abiertos" + verificacion(corte, s) + "</span></div>";
+    html += minutaHTML(m);
+    if (st.full) {
+      const movs = M.movimientos(modelo, corte);
+      html += '<section class="card movtable no-print"><div class="card__head"><h2 class="card__title" style="margin:0">Todos los movimientos detectados</h2><span class="card__sub">' + movs.length + ' movimientos</span></div><div class="card__body" style="padding:0"><div style="overflow:auto"><table><thead><tr><th>Ref.</th><th>Movimiento</th><th>Producto</th><th>Equipo</th><th>Fecha</th><th>Cambios</th><th>Estado</th></tr></thead><tbody>'
+        + (movs.map(x => '<tr data-open="' + esc(x.fila.id) + '"><td class="mono nowrap">' + esc(x.fila.id) + "</td><td>" + esc(x.tipo) + "</td><td>" + esc(x.fila.product) + "</td><td>" + esc(x.fila.area) + '</td><td class="nowrap">' + (ft(x.fecha) || "—") + "</td><td>" + esc(x.cambios || "—") + "</td><td>" + badge(x.fila) + "</td></tr>").join("") || '<tr><td colspan="7" class="empty-note">Sin movimientos.</td></tr>')
+        + "</tbody></table></div></div></section>";
+    }
+    return html;
+  }
+  function verificacion(corte, s) {
+    if (!corte.summary) return "";
+    const claves = ["ingresos", "entregas", "avances", "abiertos", "vencidos", "bloqueados", "apoyos", "proximos"];
+    const ok = claves.every(k => corte.summary[k] === s[k]);
+    return ok ? " · coinciden con el consolidado publicado" : " · ATENCIÓN: no coinciden con el resumen del consolidado";
+  }
+  function base64(b64) {
+    const bin = atob(b64.trim());
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out.buffer;
+  }
+
+  // ------------------------------------------------------------------ calidad y carga
+  function vistaCalidad(a) {
+    const corte = st.norm[st.cut];
+    const inc = corte.incidents || [];
+    const entrada = st.index && st.index.cuts ? st.index.cuts.find(c => c.cut === st.cut) : null;
+    const sinDatos = new Set(inc.filter(i => i.level === "bloqueante" && ["area_sin_datos", "archivo_ausente", "archivo_ilegible", "tabla_ausente", "encabezados_alterados"].includes(i.code)).map(i => i.area));
+    let html = '<div class="grid g2"><section class="card"><div class="card__head"><h2 class="card__title" style="margin:0">Estado del corte</h2><span class="card__sub"><span class="dot ' + estadoDe(st.cut) + '"></span> ' + esc(ESTADOS_TXT[estadoDe(st.cut)]) + '</span></div><div class="card__body"><dl class="kv">'
+      + "<dt>Corte</dt><dd>Viernes " + ft(corte.cut) + " a las 12:00 (hora de Santiago)</dd>"
+      + "<dt>Comparado con</dt><dd>" + (corte.previousRows ? "Corte del " + ft(corte.from) : "Sin corte anterior (línea base)") + "</dd>"
+      + "<dt>Captura</dt><dd>" + (entrada && entrada.capturedAt ? esc(momentoTexto(entrada.capturedAt)) : st.manual.has(st.cut) ? "Carga manual en el navegador" : "Sin registro") + "</dd>"
+      + "<dt>Registros válidos</dt><dd>" + corte.rows.length + (corte.rows.some(r => r.held) ? " (incluye " + corte.rows.filter(r => r.held).length + " con versión anterior)" : "") + "</dd>"
+      + "<dt>Filas excluidas</dt><dd>" + (corte.rejected || []).length + "</dd>"
+      + "<dt>Cobertura</dt><dd>" + modelo.areas.map(x => (sinDatos.has(x.prefix) ? "✗ " : "✓ ") + esc(x.prefix)).join(" · ") + "</dd>"
+      + (corte.approval ? "<dt>Aprobación</dt><dd>" + esc(corte.approval.by) + " · " + esc(momentoTexto(corte.approval.at)) + "<br>" + esc(corte.approval.reason) + "</dd>" : "")
+      + "</dl>";
+    if (entrada && entrada.files && (st.origin === "procesador" || st.origin === "http")) {
+      html += '<div class="sub">Archivos del corte</div><div class="toolbar">' + [["minuta", "Minuta en Word"], ["detalle", "Detalle completo (Excel)"], ["corte", "Consolidado (JSON)"], ["manifiesto", "Manifiesto"]]
+        .map(([k, t]) => '<a class="btn" href="' + esc(entrada.files[k]) + '" download>' + t + "</a>").join("") + "</div>";
+    }
+    html += '</div></section><section class="card"><div class="card__head"><h2 class="card__title" style="margin:0">Incidencias</h2><span class="card__sub">' + inc.filter(i => i.level === "bloqueante").length + " bloquean · " + inc.filter(i => i.level === "observacion").length + ' observaciones</span></div><div class="card__body">'
+      + (inc.length ? '<ul class="inc">' + inc.map(i => '<li><span class="lvl ' + i.level + '">' + (i.level === "bloqueante" ? "Bloquea" : "Observación") + "</span><span><strong>" + esc(i.area || "General") + "</strong> · " + esc(i.message) + "</span></li>").join("") + "</ul>" : '<p class="empty-note">Sin incidencias. Los cuatro registros se leyeron completos.</p>')
+      + "</div></section></div>";
+    // Historial
+    const cortes = cortesOrdenados().slice().reverse();
+    html += '<section class="card" style="margin-top:16px"><div class="card__head"><h2 class="card__title" style="margin:0">Historial de cortes</h2><span class="card__sub">' + cortes.length + ' disponibles</span></div><div class="card__body" style="padding:0"><div style="overflow:auto"><table><thead><tr><th>Corte</th><th>Estado</th><th>Ingresos</th><th>Entregas</th><th>Avances</th><th>Abiertos</th><th>Atrasados o bloqueados</th><th>Incidencias</th></tr></thead><tbody>'
+      + cortes.map(c => {
+        const x = st.cache[c] || (st.cache[c] = M.analizar(modelo, st.norm[c]));
+        const s = x.summary;
+        return '<tr data-cut="' + c + '"' + (c === st.cut ? ' style="background:var(--c-blue-soft)"' : "") + '><td class="nowrap"><strong>vie ' + ft(c) + '</strong></td><td><span class="dot ' + estadoDe(c) + '"></span> ' + esc(ESTADOS_TXT[estadoDe(c)]) + '</td><td class="tnum">' + s.ingresos + '</td><td class="tnum">' + s.entregas + '</td><td class="tnum">' + s.avances + '</td><td class="tnum">' + s.abiertos + '</td><td class="tnum">' + x.rows.filter(f => f.active && (f.late || f.blocked)).length + '</td><td class="tnum">' + (st.norm[c].incidents || []).length + "</td></tr>";
+      }).join("") + "</tbody></table></div></div></section>";
+    // Carga manual
+    const puedeGuardar = st.manual.has(st.cut) && corte.status !== "en_revision";
+    html += '<section class="card" style="margin-top:16px"><div class="card__head"><h2 class="card__title" style="margin:0">Carga manual (respaldo)</h2><span class="card__sub">para pruebas o si la automatización no corre</span></div><div class="card__body">'
+      + '<p style="margin:0 0 12px;font-size:13px;color:var(--ink-2)">Selecciona las tres copias de los Excel tomadas al corte del viernes a las 12:00. El tablero las compara con el último corte válido cargado anterior a esa fecha y genera la misma minuta que la automatización.</p>'
+      + '<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:end"><label class="field">Fecha de corte (viernes)<input type="date" id="manual-cut" value="' + corteEsperado() + '"></label>'
+      + '<div class="drop" id="drop" style="flex:1;min-width:260px">Arrastra aquí los tres Excel o <button class="linkbtn" data-act="xlsx">selecciónalos</button></div></div>'
+      + '<div class="toolbar" style="margin-top:12px"><button class="btn" data-act="json">Abrir consolidado (.json)</button><button class="btn" data-act="guardar"' + (puedeGuardar ? "" : " disabled") + '>Guardar consolidado del corte seleccionado</button><span class="status-msg" id="manual-status">'
+      + (st.manual.has(st.cut) && !puedeGuardar ? "El corte está en revisión: corrige las incidencias antes de guardarlo." : "") + "</span></div></div></section>";
+    return html;
+  }
+
+  // ------------------------------------------------------------------ acciones
+  async function cargarExcel(archivos) {
+    const msg = $("manual-status");
+    const cutInput = $("manual-cut");
+    const cut = cutInput ? cutInput.value : corteEsperado();
+    try {
+      if (!M.fechaValida(cut) || !M.esViernes(cut)) throw new Error("La fecha de corte debe ser un viernes.");
+      if (msg) msg.textContent = "Leyendo " + archivos.length + " archivos…";
+      const lectura = await DEPPLectorXlsx.leerArchivos(modelo, M, archivos);
+      const previos = cortesOrdenados().filter(c => c < cut && st.norm[c].status !== "en_revision");
+      const anterior = previos.length ? st.norm[previos[previos.length - 1]] : null;
+      const corte = M.construirCorte(modelo, lectura, cut, anterior, null);
+      if (!st.origin) st.origin = "manual";
+      st.cut = agregarCorte(corte, true);
+      st.view = "calidad";
+      render();
+      const m2 = $("manual-status");
+      if (m2) m2.textContent = "Corte armado con " + lectura.files.length + " archivos" + (anterior ? ", comparado con el corte del " + ft(anterior.cut) : ", sin corte anterior (línea base)") + ".";
+    } catch (e) {
+      if (msg) msg.textContent = e.message; else alertaSimple(e.message);
+    }
+  }
+  function alertaSimple(texto) {
+    $("banners").insertAdjacentHTML("afterbegin", '<div class="banner bad">' + esc(texto) + "</div>");
+  }
+  async function abrirJSON(archivo) {
+    try {
+      const raw = JSON.parse(await archivo.text());
+      if (!st.origin) st.origin = "manual";
+      st.cut = agregarCorte(raw, false);
+      render();
+    } catch (e) {
+      alertaSimple(e.message || "No se pudo leer el consolidado.");
+    }
+  }
+  function csv() {
+    const filas = filtrar(analisis());
+    const cab = ["Referencia", "Equipo", ...modelo.fields.slice(1).map(f => f[1]), "Movimiento en el período", "Alertas"];
+    const q = v => '"' + String(v ?? "").replace(/"/g, '""') + '"';
+    const lineas = [cab.map(q).join(";")].concat(filas.map(f => [f.id, AREAS.get(f.area).name, ft(f.received), f.request, f.product, f.kind, f.requester, f.owner, ft(f.due), f.state, ft(f.delivered), f.notes,
+      [f.receivedNow && "Ingreso", f.deliveredNow && "Entrega", f.advancedNow && "Avance"].filter(Boolean).join(", "),
+      [f.late && "Vencido", f.blocked && f.active && "Bloqueado", f.support && (f.decision ? "Decisión" : "Apoyo")].filter(Boolean).join(", ")].map(q).join(";")));
+    descargar(new Blob(["﻿" + lineas.join("\r\n")], { type: "text/csv;charset=utf-8" }), "Compromisos_DEPP_" + st.cut + ".csv");
+  }
+  async function accion(e) {
+    const act = e.currentTarget.dataset.act;
+    if (act === "xlsx") $("file-xlsx").click();
+    else if (act === "json") $("file-json").click();
+    else if (act === "limpiar") { st.filters = Object.assign({}, FILTROS_VACIOS); render(); }
+    else if (act === "csv") csv();
+    else if (act === "imprimir") window.print();
+    else if (act === "copiar") {
+      const texto = minutaTexto(M.minuta(modelo, st.norm[st.cut], st.full));
+      try { await navigator.clipboard.writeText(texto); $("minuta-status").textContent = "Minuta copiada al portapapeles."; }
+      catch (err) { $("minuta-status").textContent = "El navegador no permitió copiar. Usa «Descargar Word»."; }
+    } else if (act === "word") {
+      const m = M.minuta(modelo, st.norm[st.cut], st.full);
+      const blob = await DEPPDocx.escribir(m, base64(document.getElementById("plantilla-docx").textContent));
+      descargar(new Blob([blob], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }), "Minuta_DEPP_" + st.cut + (st.full ? "_detalle" : "") + ".docx");
+      $("minuta-status").textContent = "Minuta descargada. Revísala antes de remitirla a Gabinete SPD.";
+    } else if (act === "guardar") {
+      descargar(new Blob([JSON.stringify(st.raw[st.cut], null, 1)], { type: "application/json" }), "Corte_DEPP_" + st.cut + ".json");
+    }
+  }
+  function enlazarVista() {
+    const page = $("page");
+    for (const b of page.querySelectorAll("[data-act]")) b.addEventListener("click", accion);
+    for (const b of page.querySelectorAll("[data-open]")) {
+      b.addEventListener("click", () => abrirFicha(b.dataset.open));
+      if (b.tagName === "TR") b.addEventListener("keydown", e => { if (e.key === "Enter") abrirFicha(b.dataset.open); });
+    }
+    for (const b of page.querySelectorAll("[data-preset]")) b.addEventListener("click", () => { st.filters = Object.assign({}, FILTROS_VACIOS, { view: b.dataset.preset }); st.view = "compromisos"; render(); });
+    for (const b of page.querySelectorAll("[data-area]")) b.addEventListener("click", () => { st.filters = Object.assign({}, FILTROS_VACIOS, { area: b.dataset.area, view: "abiertos" }); st.view = "compromisos"; render(); });
+    for (const b of page.querySelectorAll("[data-full]")) b.addEventListener("click", () => { st.full = b.dataset.full === "1"; render(); });
+    for (const r of page.querySelectorAll("tr[data-cut]")) r.addEventListener("click", () => { st.cut = r.dataset.cut; render(); });
+    for (const el of page.querySelectorAll("[data-f]")) {
+      const ev = el.tagName === "INPUT" ? "input" : "change";
+      el.addEventListener(ev, () => {
+        st.filters[el.dataset.f] = el.value;
+        const pos = el.selectionStart;
+        render();
+        if (el.tagName === "INPUT") { const n = $("page").querySelector('[data-f="q"]'); n.focus(); n.setSelectionRange(pos, pos); }
+      });
+    }
+    const drop = $("drop");
+    if (drop) {
+      drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+      drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+      drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); const fs = Array.from(e.dataTransfer.files).filter(f => /\.xlsx$/i.test(f.name)); if (fs.length) cargarExcel(fs); });
+    }
+  }
+
+  // ------------------------------------------------------------------ arranque
+  async function iniciar() {
+    $("version-label").textContent = "Versión 1.0 · formato " + M.FORMATO;
+    for (const b of document.querySelectorAll(".nav__item")) b.addEventListener("click", () => { st.view = b.dataset.view; render(); $("page").focus && window.scrollTo(0, 0); });
+    $("cut-select").addEventListener("change", e => { st.cut = e.target.value; render(); });
+    $("file-xlsx").addEventListener("change", e => { const fs = Array.from(e.target.files); e.target.value = ""; if (fs.length) cargarExcel(fs); });
+    $("file-json").addEventListener("change", e => { const f = e.target.files[0]; e.target.value = ""; if (f) abrirJSON(f); });
+    if (embebidos) cargarEmbebidos(embebidos);
+    else if (/^https?:$/.test(location.protocol)) await cargarRemoto();
+    render();
+  }
+  iniciar();
+})();

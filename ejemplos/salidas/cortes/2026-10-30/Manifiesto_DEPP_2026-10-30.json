@@ -1,0 +1,53 @@
+{
+ "format": "DEPP-MANIFIESTO-1",
+ "cut": "2026-10-30",
+ "runs": [
+  {
+   "at": "2026-10-30T12:05:00-03:00",
+   "result": "publicado",
+   "status": "valido"
+  }
+ ],
+ "status": "valido",
+ "contentHash": "d624c11df8ce2ae83669d7d1e2833dbd14f101de75ae348385722903340757fe",
+ "previousCut": null,
+ "capture": {
+  "scheduledAt": "2026-10-30T12:00:00-03:00",
+  "capturedAt": "2026-10-30T12:00:40-03:00",
+  "source": "Ejemplo ficticio (Power Automate)",
+  "verified": true,
+  "files": [
+   {
+    "file": "Seguimiento_CPHDV.xlsx",
+    "etag": "ficticio"
+   },
+   {
+    "file": "Seguimiento_Departamento_Estudios.xlsx",
+    "etag": "ficticio"
+   },
+   {
+    "file": "Seguimiento_Evaluacion_Politicas_Publicas.xlsx",
+    "etag": "ficticio"
+   }
+  ],
+  "capturedAtLocal": "30/10/2026 12:00",
+  "late": false,
+  "early": false
+ },
+ "coverage": [
+  "AET",
+  "EE",
+  "EPP",
+  "CPHDV"
+ ],
+ "rowsRead": 8,
+ "rowsValid": 8,
+ "rowsRejected": 0,
+ "incidents": [],
+ "files": {
+  "corte": "Corte_DEPP_2026-10-30.json",
+  "manifiesto": "Manifiesto_DEPP_2026-10-30.json",
+  "minuta": "Minuta_DEPP_2026-10-30.docx",
+  "detalle": "Detalle_DEPP_2026-10-30.xlsx"
+ }
+}
