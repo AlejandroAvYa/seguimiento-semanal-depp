@@ -73,6 +73,8 @@ def construir():
     print("Demostración:", demo.relative_to(RAIZ))
     # Tablero operativo publicado sin datos: lee la carpeta de OneDrive en el navegador de quien lo abre.
     (RAIZ / "docs" / "tablero.html").write_text(dist.read_text(encoding="utf-8"), encoding="utf-8")
+    # Copia para dejar dentro de OneDrive › DEPP_Seguimiento › Capturas (carga automática de datos.js).
+    (RAIZ / "docs" / "Tablero_DEPP.html").write_text(dist.read_text(encoding="utf-8"), encoding="utf-8")
     print("Tablero operativo:", "docs/tablero.html")
 
 

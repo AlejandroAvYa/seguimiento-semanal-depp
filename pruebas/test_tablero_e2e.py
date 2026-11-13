@@ -198,3 +198,22 @@ def test_captura_incompleta_queda_en_revision_y_se_usa_la_anterior(navegador, tm
     pg.select_option("#cut-select", "2026-11-13_1700")
     assert "06/11/2026" in pg.locator(".hero__meta").inner_text()
     assert not errores
+
+
+def test_carga_automatica_desde_datos_js(navegador, tmp_path):
+    """El tablero dentro de Capturas carga solo las capturas que dejó el flujo (datos.js), sin elegir carpeta."""
+    capturas = tmp_path / "Capturas"
+    shutil.copytree(CAPTURAS, capturas)
+    shutil.copy(RAIZ / "docs" / "Tablero_DEPP.html", capturas / "Tablero_DEPP.html")
+    pg, errores = pagina(navegador, (capturas / "Tablero_DEPP.html").as_uri() + "?ahora=2026-11-13T18:00")
+    pg.wait_for_timeout(3000)
+    opciones = pg.locator("#cut-select option").all_inner_texts()
+    assert len(opciones) == 4 and opciones[0].startswith("Actualización · viernes 13/11/2026 a las 17:00")
+    pg.select_option("#cut-select", "2026-11-13_1200")
+    hero = cifras_hero(pg)
+    assert (hero["entregas"], hero["avances"], hero["ingresos"]) == (4, 6, 7)
+    # A las 15:00 la captura de las 17:00 todavía no corresponde: no se busca.
+    pg2, _ = pagina(navegador, (capturas / "Tablero_DEPP.html").as_uri() + "?ahora=2026-11-13T15:00")
+    pg2.wait_for_timeout(3000)
+    assert pg2.locator("#cut-select option").count() == 3
+    assert not errores

@@ -3,6 +3,7 @@
 Salida: ejemplos/capturas/<AAAA-MM-DD_HHMM>/ (tres Excel + captura.json, igual que el flujo) y ejemplos/salidas/.
 Todos los datos son ficticios. Uso: python herramientas/generar_ejemplos.py
 """
+import base64
 import datetime as dt
 import json
 import os
@@ -167,6 +168,11 @@ def escribir_captura(slot, destino: pathlib.Path, base=None):
     (destino / "captura.json").write_text(json.dumps({
         "scheduledAt": utc(fecha, hora + ":00"), "capturedAt": utc(fecha, hora + ":40"),
         "slot": slot, "verified": False}, ensure_ascii=False), encoding="utf-8")
+    # datos.js: lo mismo que escribe el flujo para que el tablero cargue solo (Excel en base64).
+    archivos = [{"file": f, "b64": base64.b64encode((destino / f).read_bytes()).decode("ascii")} for f in sorted(libros)]
+    (destino / "datos.js").write_text("DEPP_CAPTURAS.push(" + json.dumps({
+        "turno": slot, "capturedAt": utc(fecha, hora + ":40"), "scheduledAt": utc(fecha, hora + ":00"),
+        "archivos": archivos}, separators=(",", ":")) + ");", encoding="utf-8")
 
 
 def main():

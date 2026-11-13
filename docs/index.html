@@ -1103,7 +1103,10 @@ td.nowrap{white-space:nowrap}
   const fechaLarga = d => { const [y, m, dd] = d.split("-").map(Number); return dd + " de " + MESES[m - 1] + " de " + y; };
   const diasEntre = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
   const claseEstado = s => "b-" + String(s).replace(/ /g, "-");
+  const PARAMS = new URLSearchParams(location.search);
   function hoySantiago() {
+    const fijo = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})$/.exec(PARAMS.get("ahora") || "");
+    if (fijo) return { dia: fijo[1], hora: Number(fijo[2]) * 60 + Number(fijo[3]) };
     const p = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Santiago", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date());
     const g = n => p.find(x => x.type === n).value;
     return { dia: g("year") + "-" + g("month") + "-" + g("day"), hora: Number(g("hour")) * 60 + Number(g("minute")) };
@@ -1320,6 +1323,66 @@ td.nowrap{white-space:nowrap}
     if (permiso !== "granted") permiso = await h.requestPermission({ mode: "read" });
     if (permiso === "granted") await leerHandle(h);
   }
+  // ------------------------------------------------------------------ carga automática (tablero dentro de Capturas)
+  /** Turnos que pudo dejar el flujo: viernes 12:00 de las últimas 26 semanas y todos los turnos de los últimos 8 días. */
+  function turnosCandidatos() {
+    const h = hoySantiago();
+    const salida = new Set();
+    for (let i = 0; i <= 26 * 7; i++) {
+      const dia = M.desplazar(h.dia, -i);
+      const ds = new Date(dia + "T00:00:00Z").getUTCDay();
+      if (ds === 0 || ds === 6) continue;
+      const horas = i <= 8 ? (ds === 5 ? ["0900", "1200", "1700"] : ["0900", "1700"]) : (ds === 5 ? ["1200"] : []);
+      for (const hh of horas) {
+        if (i === 0 && Number(hh.slice(0, 2)) * 60 + Number(hh.slice(2)) > h.hora) continue;
+        salida.add(dia + "_" + hh);
+      }
+    }
+    for (const extra of (PARAMS.get("prueba") || "").split(",")) if (RE_TURNO.test(extra)) salida.add(extra);
+    return Array.from(salida).sort();
+  }
+  function cargarScript(ruta) {
+    return new Promise(ok => {
+      const el = document.createElement("script");
+      el.src = ruta;
+      el.onload = () => { el.remove(); ok(true); };
+      el.onerror = () => { el.remove(); ok(false); };
+      document.head.appendChild(el);
+    });
+  }
+  function base64ABytes(b64) {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  /** Lee los datos.js que deja el flujo junto a cada captura. Devuelve false si no encontró ninguno. */
+  async function cargarAutomatico() {
+    window.DEPP_CAPTURAS = [];
+    const candidatos = turnosCandidatos();
+    estadoCarpeta("Buscando capturas en la carpeta…");
+    for (let i = 0; i < candidatos.length; i += 12) {
+      await Promise.all(candidatos.slice(i, i + 12).map(t => cargarScript(t + "/datos.js")));
+    }
+    const capturas = (window.DEPP_CAPTURAS || []).filter(c => c && RE_TURNO.test(c.turno || "") && Array.isArray(c.archivos));
+    if (!capturas.length) { $("banners").innerHTML = ""; return false; }
+    const entradas = [];
+    for (const c of capturas) {
+      for (const a of c.archivos) {
+        if (!a || !a.file || !a.b64) continue;
+        const archivo = new File([base64ABytes(a.b64)], a.file, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+        entradas.push({ turno: c.turno, nombre: a.file, file: async () => archivo });
+      }
+      const meta = new File([JSON.stringify({ capturedAt: c.capturedAt, scheduledAt: c.scheduledAt, verified: false })], "captura.json");
+      entradas.push({ turno: c.turno, nombre: "captura.json", file: async () => meta });
+    }
+    await procesarCapturas(entradas, "Capturas");
+    st.origin = "carpeta";
+    st.automatico = true;
+    render();
+    return true;
+  }
+
   /** Último turno programado que ya debería estar en la carpeta (con 45 minutos de margen). */
   function turnoEsperado() {
     const h = hoySantiago();
@@ -1801,9 +1864,10 @@ td.nowrap{white-space:nowrap}
       try { await procesarCapturas(entradasDesdeLista(fs), nombre); }
       catch (err) { console.error(err); estadoCarpeta(err.message, "bad"); }
     });
-    $("btn-actualizar").addEventListener("click", actualizarCarpeta);
+    $("btn-actualizar").addEventListener("click", () => { if (st.automatico) location.reload(); else actualizarCarpeta(); });
     if (embebidos) cargarEmbebidos(embebidos);
     else if (/^https?:$/.test(location.protocol) && await cargarRemoto()) { /* datos publicados en el servidor */ }
+    else if (location.protocol === "file:" && await cargarAutomatico()) return;
     else {
       const h = await idb.get("carpeta");
       if (h && h.queryPermission) {
