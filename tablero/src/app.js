@@ -207,9 +207,13 @@
       try { agregarCorte(await construirTurno(porTurno[ultimoIntermedio], ultimoIntermedio, anterior, "actualizacion"), false); }
       catch (e) { errores.push(ultimoIntermedio + ": " + e.message); }
     }
+    const previo = st.cutPrevio;
+    st.cutPrevio = null;
     st.carpeta = { nombre: nombreCarpeta || "", turnos: turnos, leidaEn: new Date().toISOString(), errores: errores };
-    st.cut = cortesOrdenados().slice(-1)[0] || null;
-    st.view = "resumen";
+    const ultimo = cortesOrdenados().slice(-1)[0] || null;
+    // Al refrescar se mantiene la vista; si se miraba la última captura, se pasa a la nueva.
+    st.cut = previo && st.norm[previo] && !esIntermedio(previo) ? previo : ultimo;
+    if (!previo) st.view = "resumen";
     render();
   }
   async function leerHandle(handle) {
@@ -258,6 +262,7 @@
   }
   // ------------------------------------------------------------------ carga automática (tablero dentro de Capturas)
   /** Turnos que pudo dejar el flujo: viernes 12:00 de las últimas 26 semanas y todos los turnos de los últimos 8 días. */
+  const HORAS_CAPTURA = ["0800", "0900", "1000", "1100", "1200", "1300", "1400", "1500", "1600", "1700", "1800", "1900"];
   function turnosCandidatos() {
     const h = hoySantiago();
     const salida = new Set();
@@ -265,7 +270,7 @@
       const dia = M.desplazar(h.dia, -i);
       const ds = new Date(dia + "T00:00:00Z").getUTCDay();
       if (ds === 0 || ds === 6) continue;
-      const horas = i <= 8 ? (ds === 5 ? ["0900", "1200", "1700"] : ["0900", "1700"]) : (ds === 5 ? ["1200"] : []);
+      const horas = i <= 8 ? HORAS_CAPTURA : (ds === 5 ? ["1200"] : []);
       for (const hh of horas) {
         if (i === 0 && Number(hh.slice(0, 2)) * 60 + Number(hh.slice(2)) > h.hora) continue;
         salida.add(dia + "_" + hh);
@@ -295,7 +300,7 @@
     const candidatos = turnosCandidatos();
     estadoCarpeta("Buscando capturas en la carpeta…");
     for (let i = 0; i < candidatos.length; i += 12) {
-      await Promise.all(candidatos.slice(i, i + 12).map(t => cargarScript(t + "/datos.js")));
+      await Promise.all(candidatos.slice(i, i + 12).map(t => cargarScript(t + "/datos.js?v=" + Date.now())));
     }
     const capturas = (window.DEPP_CAPTURAS || []).filter(c => c && RE_TURNO.test(c.turno || "") && Array.isArray(c.archivos));
     if (!capturas.length) { $("banners").innerHTML = ""; return false; }
@@ -313,6 +318,7 @@
     st.origin = "carpeta";
     st.automatico = true;
     render();
+    if (!st.refrescoAuto) st.refrescoAuto = setInterval(() => { st.cutPrevio = st.cut; cargarAutomatico(); }, 30 * 60000);
     return true;
   }
 
@@ -323,9 +329,8 @@
       const dia = M.desplazar(h.dia, -i);
       const ds = new Date(dia + "T00:00:00Z").getUTCDay();
       if (ds === 0 || ds === 6) continue;
-      const horas = ds === 5 ? ["1700", "1200", "0900"] : ["1700", "0900"];
-      for (const hh of horas) {
-        const minutos = Number(hh.slice(0, 2)) * 60 + Number(hh.slice(2)) + 45;
+      for (const hh of HORAS_CAPTURA.slice().reverse()) {
+        const minutos = Number(hh.slice(0, 2)) * 60 + Number(hh.slice(2)) + 30;
         if (i > 0 || h.hora >= minutos) return dia + "_" + hh;
       }
     }
@@ -404,7 +409,7 @@
   function vistaInicio() {
     const pendiente = st.carpetaPendiente;
     return '<div class="start"><div class="page__eyebrow">Seguimiento semanal DEPP</div><h1>' + (pendiente ? "Actualiza la información" : "Conecta la carpeta de seguimiento") + "</h1>"
-      + "<p>Elige la carpeta <strong>DEPP_Seguimiento</strong> de OneDrive sincronizada en este computador. El tablero lee las capturas de las 9:00 y 17:00 de lunes a viernes, y la del viernes a las 12:00 para el corte semanal, y arma los cortes y la minuta en este navegador. Los datos no se envían a ningún servidor.</p>"
+      + "<p>Elige la carpeta <strong>DEPP_Seguimiento</strong> de OneDrive sincronizada en este computador. El tablero lee las capturas que se toman cada hora de lunes a viernes, y usa la del viernes a las 12:00 como corte semanal, y arma los cortes y la minuta en este navegador. Los datos no se envían a ningún servidor.</p>"
       + '<div class="toolbar" style="justify-content:center;margin-top:18px">'
       + (pendiente ? '<button class="btn primary" data-act="actualizar">Actualizar desde «' + esc(pendiente) + '»</button><button class="btn" data-act="carpeta">Elegir otra carpeta</button>'
         : '<button class="btn primary" data-act="carpeta">Conectar carpeta de OneDrive</button>')
@@ -797,7 +802,7 @@
       try { await procesarCapturas(entradasDesdeLista(fs), nombre); }
       catch (err) { console.error(err); estadoCarpeta(err.message, "bad"); }
     });
-    $("btn-actualizar").addEventListener("click", () => { if (st.automatico) location.reload(); else actualizarCarpeta(); });
+    $("btn-actualizar").addEventListener("click", () => { if (st.automatico) { st.cutPrevio = st.cut; cargarAutomatico(); } else actualizarCarpeta(); });
     if (embebidos) cargarEmbebidos(embebidos);
     else if (/^https?:$/.test(location.protocol) && await cargarRemoto()) { /* datos publicados en el servidor */ }
     else if (location.protocol === "file:" && await cargarAutomatico()) return;

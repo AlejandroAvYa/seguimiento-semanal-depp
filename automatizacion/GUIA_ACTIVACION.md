@@ -7,7 +7,7 @@ Esta es la forma en operación. No requiere permisos de administrador, instalaci
 | Parte | Qué se hace | Quién |
 |---|---|---|
 | 1 | Carpeta `DEPP_Seguimiento` en OneDrive con `Planillas` y `Capturas`; cada Excel compartido solo con su equipo | Dueño de la carpeta |
-| 2 | Flujo de nube «DEPP - Captura de planillas» en Power Automate: copia los tres Excel a `Capturas/AAAA-MM-DD_HHMM` de lunes a viernes a las 9:00 y 17:00, y el viernes a las 12:00 (corte semanal), con zona horaria Santiago | Dueño de la carpeta, con su cuenta |
+| 2 | Flujo de nube «DEPP - Captura de planillas» en Power Automate: copia los tres Excel a `Capturas/AAAA-MM-DD_HHMM` cada hora de 8:00 a 19:00, de lunes a viernes, con zona horaria Santiago; la captura del viernes a las 12:00 es el corte semanal. Cada captura deja también `datos.js` | Dueño de la carpeta, con su cuenta |
 | 3 | Compartir la carpeta `Capturas` con la jefatura con permiso de lectura y sincronizarla en su computador | Dueño de la carpeta y jefatura |
 | 4 | Abrir el tablero (`https://alejandroavya.github.io/seguimiento-semanal-depp/tablero.html`), elegir una vez la carpeta sincronizada y pulsar «Actualizar» cuando se quiera ver lo último | Jefatura |
 

@@ -217,3 +217,25 @@ def test_carga_automatica_desde_datos_js(navegador, tmp_path):
     pg2.wait_for_timeout(3000)
     assert pg2.locator("#cut-select option").count() == 3
     assert not errores
+
+
+def test_captura_horaria_y_boton_actualizar(navegador, tmp_path):
+    """Las capturas de cada hora se encuentran solas y «Actualizar» trae la nueva sin recargar la página."""
+    capturas = tmp_path / "Capturas"
+    shutil.copytree(CAPTURAS, capturas)
+    shutil.copy(RAIZ / "docs" / "Tablero_DEPP.html", capturas / "Tablero_DEPP.html")
+    pg, errores = pagina(navegador, (capturas / "Tablero_DEPP.html").as_uri() + "?ahora=2026-11-13T18:40")
+    pg.wait_for_timeout(3000)
+    assert pg.locator("#cut-select option").first.inner_text().startswith("Actualización · viernes 13/11/2026 a las 17:00")
+    assert "Falta la captura del viernes 13/11/2026 a las 18:00" in pg.locator("#banners").inner_text()
+    # Llega la captura de las 18:00 (copia de la de las 17:00 con su propio turno).
+    nueva = capturas / "2026-11-13_1800"
+    shutil.copytree(capturas / "2026-11-13_1700", nueva)
+    js = (nueva / "datos.js").read_text(encoding="utf-8").replace("2026-11-13_1700", "2026-11-13_1800")
+    (nueva / "datos.js").write_text(js, encoding="utf-8")
+    pg.click("#btn-actualizar")
+    pg.wait_for_timeout(3000)
+    assert pg.locator("#cut-select option").first.inner_text().startswith("Actualización · viernes 13/11/2026 a las 18:00")
+    assert pg.locator("#cut-select option").count() == 4
+    assert "Falta la captura" not in pg.locator("#banners").inner_text()
+    assert not errores
