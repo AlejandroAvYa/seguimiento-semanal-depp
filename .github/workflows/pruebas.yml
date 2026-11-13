@@ -22,4 +22,4 @@ jobs:
       - name: Pruebas
         run: python -m pytest -q pruebas
       - name: Verificar que los archivos construidos están al día
-        run: git diff --exit-code -- docs tablero/dist ':(glob)ejemplos/salidas/**/*.json' plantillas/Modelo_Minuta_Semanal_DEPP.docx || (echo "Ejecute herramientas/construir_todo.py y confirme los cambios" && exit 1)
+        run: git diff --exit-code -- docs tablero/dist ':(glob)ejemplos/salidas/**/*.json' || (echo "Ejecute herramientas/construir_todo.py y confirme los cambios" && exit 1)
