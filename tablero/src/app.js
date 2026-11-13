@@ -240,9 +240,10 @@
     try {
       h = await window.showDirectoryPicker({ id: "depp-seguimiento", mode: "read" });
     } catch (e) {
-      estadoCarpeta(e.name === "AbortError"
+      const detalle = " [Detalle técnico: " + e.name + " · " + (e.message || "sin mensaje") + " · " + navigator.userAgent.replace(/^.*(Edg|Chrome)\/(\d+).*$/, "$1 $2") + "]";
+      estadoCarpeta((e.name === "AbortError"
         ? "No se recibió la carpeta. Si el navegador preguntó si permites ver los archivos, hay que aceptar «Ver archivos» (View files). Vuelve a pulsar «Conectar carpeta de OneDrive»."
-        : "El navegador no permitió abrir la carpeta: " + e.message + " Prueba con «Elegir carpeta (método alternativo)».", "warn");
+        : "El navegador no permitió abrir la carpeta: " + e.message + " Prueba con «Elegir carpeta (método alternativo)».") + detalle, "warn");
       return;
     }
     await idb.set("carpeta", h);
