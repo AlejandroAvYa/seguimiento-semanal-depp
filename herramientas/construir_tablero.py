@@ -56,10 +56,24 @@ def construir():
     indice = salidas.leer_indice(ej)
     cortes = {c["cut"]: json.loads((ej / c["files"]["corte"]).read_text(encoding="utf-8")) for c in indice["cuts"]}
     indice = dict(indice, lastRun=None, updatedAt=None)
+    # Actualización intermedia ficticia (viernes 13/11 a las 17:00), comparada con el corte de las 12:00.
+    from depp_corte import lectura, motor
+    modelo_py = json.loads((SRC / "modelo_depp.json").read_text(encoding="utf-8"))
+    intermedia = RAIZ / "ejemplos" / "capturas" / "2026-11-13_1700"
+    if intermedia.is_dir():
+        anterior = motor.leer_corte(modelo_py, cortes["2026-11-13"])
+        datos = lectura.leer_carpeta(modelo_py, intermedia)
+        meta = json.loads((intermedia / "captura.json").read_text(encoding="utf-8"))
+        cortes["2026-11-13_1700"] = motor.construir_corte(
+            modelo_py, datos, "2026-11-13", anterior, {"capturedAt": meta["capturedAt"], "late": False, "verified": False},
+            {"kind": "actualizacion", "slot": "2026-11-13_1700"})
     demo = RAIZ / "docs" / "index.html"
     demo.parent.mkdir(parents=True, exist_ok=True)
     salidas.insertar_datos(dist, demo, {"index": indice, "cuts": cortes, "origin": "demo"})
     print("Demostración:", demo.relative_to(RAIZ))
+    # Tablero operativo publicado sin datos: lee la carpeta de OneDrive en el navegador de quien lo abre.
+    (RAIZ / "docs" / "tablero.html").write_text(dist.read_text(encoding="utf-8"), encoding="utf-8")
+    print("Tablero operativo:", "docs/tablero.html")
 
 
 if __name__ == "__main__":

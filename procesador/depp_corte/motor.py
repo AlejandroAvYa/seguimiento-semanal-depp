@@ -61,6 +61,17 @@ def viernes_de_corte(hoy: str) -> str:
     return desplazar(hoy, -((js_dia + 2) % 7))
 
 
+DIAS = ("domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado")
+
+
+def momento_slot(slot, dia) -> str:
+    """«lunes 16/11/2026 a las 09:00» a partir de un turno AAAA-MM-DD_HHMM."""
+    d = slot[:10] if slot else dia
+    nombre = DIAS[(_dt.date.fromisoformat(d).weekday() + 1) % 7]
+    hora = f" a las {slot[11:13]}:{slot[13:15]}" if slot and re.search(r"_\d{4}$", slot) else ""
+    return f"{nombre} {fecha_texto(d)}{hora}"
+
+
 def plural(n: int, singular: str, plural_txt: str | None = None) -> str:
     return f"{n} {singular if n == 1 else (plural_txt or singular + 's')}"
 
@@ -185,10 +196,12 @@ def filas_desde_json(modelo, filas, contexto):
 
 
 # ---------------------------------------------------------------------------- construcción del corte
-def construir_corte(modelo, lectura, cut, anterior=None, captura=None):
+def construir_corte(modelo, lectura, cut, anterior=None, captura=None, opciones=None):
+    op = opciones or {}
+    actualizacion = op.get("kind") == "actualizacion"
     if not fecha_valida(cut):
         raise ValueError("Fecha de corte inválida.")
-    if anterior and anterior["cut"] >= cut:
+    if anterior and (anterior["cut"] > cut if actualizacion else anterior["cut"] >= cut):
         raise ValueError("El corte anterior debe ser previo a la fecha de corte.")
     incidencias = []
 
@@ -259,7 +272,7 @@ def construir_corte(modelo, lectura, cut, anterior=None, captura=None):
                         f"El registro {rid} estaba en el corte anterior y ya no aparece en el Excel.")
     if captura and captura.get("late") and not captura.get("verified"):
         agregar("bloqueante", "captura_demorada", "",
-                f"La captura se realizó a las {captura.get('capturedAtLocal') or '?'} y no se pudo verificar la versión de las 12:00.")
+                f"La captura se realizó a las {captura.get('capturedAtLocal') or '?'} y no se pudo verificar la versión de la hora programada.")
 
     orden_area = [a["prefix"] for a in modelo["areas"]]
     filas = sorted(validas + retenidas, key=lambda f: (orden_area.index(f["area"]), int(f["number"])))
@@ -275,6 +288,12 @@ def construir_corte(modelo, lectura, cut, anterior=None, captura=None):
         "rejected": rechazadas,
         "incidents": incidencias,
     }
+    if op.get("kind"):
+        corte["kind"] = op["kind"]
+    if op.get("slot"):
+        corte["slot"] = op["slot"]
+    if captura and captura.get("capturedAt"):
+        corte["capturedAt"] = captura["capturedAt"]
     corte["summary"] = analizar(modelo, corte)["summary"]
     return corte
 
@@ -301,6 +320,7 @@ def leer_corte(modelo, datos):
         "previousRows": previas, "rows": filas,
         "rejected": datos.get("rejected") or [], "incidents": datos.get("incidents") or [],
         "summary": datos.get("summary"), "approval": datos.get("approval"),
+        "kind": datos.get("kind") or "semanal", "slot": datos.get("slot"), "capturedAt": datos.get("capturedAt"),
     }
 
 
@@ -432,7 +452,12 @@ def _recortar(lista, limite):
 def minuta(modelo, corte, completo=False):
     a = analizar(modelo, corte)
     s = a["summary"]
-    if a["comparing"]:
+    actualizacion = corte.get("kind") == "actualizacion"
+    momento = momento_slot(corte.get("slot"), a["cut"])
+    if actualizacion:
+        periodo = (f"Avance desde el corte del viernes {fecha_texto(a['from'])} a las 12:00 hasta el {momento}. "
+                   "Es una actualización intermedia; la minuta oficial usa el corte del viernes a las 12:00.")
+    elif a["comparing"]:
         periodo = f"Del viernes {fecha_texto(a['from'])} a las 12:00 al viernes {fecha_texto(a['cut'])} a las 12:00."
     else:
         periodo = (f"Corte inicial al viernes {fecha_texto(a['cut'])} a las 12:00. Considera ingresos y entregas desde el "
@@ -513,13 +538,15 @@ def minuta(modelo, corte, completo=False):
     obs = sum(1 for i in incid if i["level"] == "observacion")
     if obs:
         notas.append(f"El corte registra {plural(obs, 'observación de carga', 'observaciones de carga')}; el detalle completo las identifica por equipo y fila.")
-    notas.append(f"Fuente: planillas de seguimiento de los equipos DEPP, corte del viernes {fecha_texto(a['cut'])} a las 12:00 (hora de Santiago). Un compromiso puede registrar más de un movimiento en el período.")
+    origen = f"captura del {momento}" if actualizacion else f"corte del viernes {fecha_texto(a['cut'])} a las 12:00"
+    notas.append(f"Fuente: planillas de seguimiento de los equipos DEPP, {origen} (hora de Santiago). Un compromiso puede registrar más de un movimiento en el período.")
     return {
         "institution": "SUBSECRETARÍA DE PREVENCIÓN DEL DELITO",
         "kind": "MINUTA",
         "title": "SEGUIMIENTO SEMANAL DE LA DIVISIÓN DE ESTUDIOS Y POLÍTICAS PÚBLICAS (DEPP)",
-        "recipient": f"Para: Gabinete SPD · Corte del {fecha_texto(a['cut'])}",
-        "draft": corte.get("status") == "en_revision",
+        "recipient": f"Para: Jefatura DEPP · Actualización del {momento}" if actualizacion else f"Para: Gabinete SPD · Corte del {fecha_texto(a['cut'])}",
+        "draft": corte.get("status") == "en_revision" or actualizacion,
+        "draftLabel": "AVANCE INTERMEDIO · NO ES EL CORTE SEMANAL" if actualizacion else "BORRADOR · CORTE EN REVISIÓN",
         "full": bool(completo),
         "sections": secciones,
         "notes": notas,

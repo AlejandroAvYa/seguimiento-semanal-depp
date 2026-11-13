@@ -49,15 +49,17 @@ def cifras_hero(pg):
 
 def test_carga_manual_de_excel_reproduce_el_procesador(navegador, tmp_path):
     pg, errores = pagina(navegador, TABLERO.as_uri())
+    pg.evaluate("document.querySelectorAll('details').forEach(d => d.open = true)")
     for cut in ("2026-10-30", "2026-11-06", "2026-11-13"):
         pg.fill("#manual-cut", cut)
-        pg.set_input_files("#file-xlsx", sorted(str(p) for p in (CAPTURAS / cut).glob("*.xlsx")))
+        pg.set_input_files("#file-xlsx", sorted(str(p) for p in (CAPTURAS / f"{cut}_1200").glob("*.xlsx")))
         pg.wait_for_timeout(900)
         publicado = json.loads((SALIDAS / "cortes" / cut / f"Corte_DEPP_{cut}.json").read_text(encoding="utf-8"))
         # El consolidado armado en el navegador es idéntico al del procesador.
         with pg.expect_download() as d:
             pg.click('[data-act="guardar"]')
         armado = json.loads(pathlib.Path(d.value.path()).read_text(encoding="utf-8"))
+        publicado.pop("capturedAt", None)  # la carga manual no tiene registro de captura
         assert armado == publicado, cut
     assert not errores
 
@@ -105,7 +107,7 @@ def test_filtros_y_ficha(navegador):
     pg.keyboard.press("Escape")
     assert pg.locator(".drawer").count() == 0
     # Consulta de un corte anterior.
-    pg.select_option("#cut-select", "2026-11-06")
+    pg.select_option("#cut-select", "2026-11-06_1200")
     assert pg.locator(".count").inner_text().endswith("de 13")
     assert not errores
 
@@ -129,9 +131,70 @@ def test_corte_en_revision_y_falla_visibles(navegador, tmp_path):
     pg, errores = pagina(navegador, destino.as_uri())
     banners = pg.locator("#banners").inner_text()
     assert "quedó en revisión" in banners and "06/11/2026" in banners
-    assert pg.locator("#cut-select").input_value() == "2026-11-06"
-    pg.select_option("#cut-select", "2026-11-13")
+    assert pg.locator("#cut-select").input_value() == "2026-11-06_1200"
+    pg.select_option("#cut-select", "2026-11-13_1200")
     assert "Corte en revisión" in pg.locator("#banners").inner_text()
     pg.click('.nav__item[data-view="minuta"]')
     assert "BORRADOR" in pg.locator("#paper").inner_text()
+    assert not errores
+
+
+# ------------------------------------------------------------------ carpeta de capturas de OneDrive
+def carpeta_onedrive(tmp_path, quitar=None):
+    """Copia ejemplos/capturas con la misma estructura que deja el flujo: DEPP_Seguimiento/Capturas/AAAA-MM-DD_HHMM/."""
+    raiz = tmp_path / "DEPP_Seguimiento"
+    shutil.copytree(CAPTURAS, raiz / "Capturas")
+    (raiz / "Planillas").mkdir()
+    shutil.copy(RAIZ / "plantillas" / "Seguimiento_CPHDV.xlsx", raiz / "Planillas" / "Seguimiento_CPHDV.xlsx")
+    if quitar:
+        (raiz / "Capturas" / quitar[0] / quitar[1]).unlink()
+    return raiz
+
+
+def resumen_intermedio():
+    from depp_corte import lectura
+    anterior = motor.leer_corte(MODELO, json.loads((SALIDAS / "cortes" / "2026-11-13" / "Corte_DEPP_2026-11-13.json").read_text(encoding="utf-8")))
+    datos = lectura.leer_carpeta(MODELO, CAPTURAS / "2026-11-13_1700")
+    return motor.construir_corte(MODELO, datos, "2026-11-13", anterior, None, {"kind": "actualizacion", "slot": "2026-11-13_1700"})["summary"]
+
+
+def test_tablero_lee_la_carpeta_de_capturas(navegador, tmp_path):
+    raiz = carpeta_onedrive(tmp_path)
+    pg, errores = pagina(navegador, (RAIZ / "docs" / "tablero.html").as_uri())
+    assert "Conecta la carpeta" in pg.locator("#page").inner_text()
+    pg.set_input_files("#file-dir", str(raiz))
+    pg.wait_for_timeout(2500)
+    opciones = pg.locator("#cut-select option").all_inner_texts()
+    assert len(opciones) == 4 and opciones[0].startswith("Actualización · viernes 13/11/2026 a las 17:00")
+    # Actualización intermedia: avance desde el corte del viernes 12:00.
+    s = resumen_intermedio()
+    hero = cifras_hero(pg)
+    assert (hero["entregas"], hero["avances"], hero["ingresos"]) == (s["entregas"], s["avances"], s["ingresos"]) == (1, 1, 1)
+    assert "Actualización intermedia" in pg.locator("#banners").inner_text()
+    pg.click('.nav__item[data-view="minuta"]')
+    assert "AVANCE INTERMEDIO" in pg.locator("#paper").inner_text()
+    # Corte semanal del viernes 12:00: mismas cifras que el procesador y que la minuta oficial.
+    pg.select_option("#cut-select", "2026-11-13_1200")
+    texto = pg.locator("#paper").inner_text()
+    assert "se registraron 7 ingresos y 4 entregas" in texto and "6 compromisos tuvieron avance" in texto
+    with pg.expect_download() as d:
+        pg.click('[data-act="word"]')
+    with zipfile.ZipFile(pathlib.Path(d.value.path())) as z:
+        doc_js = z.read("word/document.xml").decode("utf-8")
+    with zipfile.ZipFile(SALIDAS / "cortes" / "2026-11-13" / "Minuta_DEPP_2026-11-13.docx") as z:
+        assert doc_js == z.read("word/document.xml").decode("utf-8")
+    assert d.value.suggested_filename == "Minuta_DEPP_2026-11-13.docx"
+    assert not errores
+
+
+def test_captura_incompleta_queda_en_revision_y_se_usa_la_anterior(navegador, tmp_path):
+    raiz = carpeta_onedrive(tmp_path, quitar=("2026-11-13_1200", "Seguimiento_CPHDV.xlsx"))
+    pg, errores = pagina(navegador, (RAIZ / "docs" / "tablero.html").as_uri())
+    pg.set_input_files("#file-dir", str(raiz))
+    pg.wait_for_timeout(2500)
+    pg.select_option("#cut-select", "2026-11-13_1200")
+    assert "Corte en revisión" in pg.locator("#banners").inner_text()
+    # La actualización de las 17:00 se compara con el último corte válido (06/11).
+    pg.select_option("#cut-select", "2026-11-13_1700")
+    assert "06/11/2026" in pg.locator(".hero__meta").inner_text()
     assert not errores

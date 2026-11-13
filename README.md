@@ -4,7 +4,10 @@ Sistema de seguimiento semanal de la División de Estudios y Políticas Pública
 
 **Este repositorio contiene solo código, plantillas vacías y datos ficticios.** Los Excel reales, las capturas, los consolidados y cualquier credencial quedan en el OneDrive institucional (ver `.gitignore`).
 
-Demostración con datos ficticios: `docs/index.html` (publicada con GitHub Pages).
+- Demostración con datos ficticios: https://alejandroavya.github.io/seguimiento-semanal-depp/
+- Tablero operativo (sin datos; lee la carpeta de capturas de OneDrive en el navegador): https://alejandroavya.github.io/seguimiento-semanal-depp/tablero.html
+
+Flujo en operación: Power Automate copia los tres Excel a `Capturas/AAAA-MM-DD_HHMM` de lunes a viernes a las 9:00 y 17:00, y el viernes a las 12:00 para el corte semanal. El tablero lee esa carpeta desde el computador de la jefatura y arma cortes, actualizaciones y minuta sin enviar datos a ningún servidor.
 
 ## Estructura
 

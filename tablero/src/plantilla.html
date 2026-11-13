@@ -51,7 +51,7 @@ button,input,select{font:inherit;color:inherit}button{cursor:pointer;border:none
 .topbar__sub{font-size:12px;color:var(--ink-3)}
 .topbar__spacer{flex:1}
 .cutpick{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line-2);border-radius:999px;padding:4px 6px 4px 14px;font-size:12.5px;color:var(--ink-2);font-weight:500}
-.cutpick select{border:none;background:transparent;font-weight:700;color:var(--ink);padding:4px 4px;cursor:pointer;max-width:260px}
+.cutpick select{border:none;background:transparent;font-weight:700;color:var(--ink);padding:4px 4px;cursor:pointer;max-width:380px}
 .dot{width:9px;height:9px;border-radius:50%;flex:none;display:inline-block}
 .dot.valido{background:var(--c-ok)}.dot.valido_con_observaciones{background:#c6890f}.dot.en_revision{background:var(--c-red)}.dot.manual{background:var(--c-slate)}
 .meta{text-align:right}.meta .k{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);font-weight:700}.meta .v{font-size:12.5px;font-weight:600}
@@ -240,6 +240,7 @@ td.nowrap{white-space:nowrap}
         <label for="cut-select">Corte</label>
         <select id="cut-select"></select>
       </div>
+      <button class="btn" id="btn-actualizar" hidden>Actualizar</button>
       <div class="meta" id="update-meta" hidden><div class="k">Actualización</div><div class="v" id="update-label"></div></div>
     </header>
     <div id="banners" role="status" aria-live="polite"></div>
@@ -249,6 +250,7 @@ td.nowrap{white-space:nowrap}
 <div id="drawer-root"></div>
 <input type="file" id="file-xlsx" accept=".xlsx" multiple hidden>
 <input type="file" id="file-json" accept=".json,application/json" hidden>
+<input type="file" id="file-dir" webkitdirectory multiple hidden>
 <script id="modelo" type="application/json">__MODELO__</script>
 <script id="plantilla-docx" type="text/plain">__DOCX__</script>
 <script id="datos-cortes" type="application/json">null</script>

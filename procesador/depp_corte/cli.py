@@ -83,7 +83,9 @@ def procesar(args) -> int:
     cut = args.corte or corte_por_defecto()
     momento = ahora().isoformat()
     raiz_capturas = pathlib.Path(args.capturas)
-    carpeta = raiz_capturas / cut
+    carpeta = raiz_capturas / f"{cut}_1200"  # nombre que deja el flujo de Power Automate
+    if not carpeta.is_dir():
+        carpeta = raiz_capturas / cut
     if not carpeta.is_dir() and any(raiz_capturas.glob("*.xlsx")):
         carpeta = raiz_capturas  # se indicó directamente la carpeta del corte
     try:

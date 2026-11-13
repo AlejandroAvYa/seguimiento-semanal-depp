@@ -27,7 +27,7 @@
     "bloqueantes": 0,
     "observaciones": 0
    },
-   "capturedAt": "2026-10-30T12:00:40-03:00",
+   "capturedAt": "2026-10-30T15:00:40Z",
    "files": {
     "corte": "cortes/2026-10-30/Corte_DEPP_2026-10-30.json",
     "manifiesto": "cortes/2026-10-30/Manifiesto_DEPP_2026-10-30.json",
@@ -53,7 +53,7 @@
     "bloqueantes": 0,
     "observaciones": 0
    },
-   "capturedAt": "2026-11-06T12:00:40-03:00",
+   "capturedAt": "2026-11-06T15:00:40Z",
    "files": {
     "corte": "cortes/2026-11-06/Corte_DEPP_2026-11-06.json",
     "manifiesto": "cortes/2026-11-06/Manifiesto_DEPP_2026-11-06.json",
@@ -79,7 +79,7 @@
     "bloqueantes": 0,
     "observaciones": 0
    },
-   "capturedAt": "2026-11-13T12:00:40-03:00",
+   "capturedAt": "2026-11-13T15:00:40Z",
    "files": {
     "corte": "cortes/2026-11-13/Corte_DEPP_2026-11-13.json",
     "manifiesto": "cortes/2026-11-13/Manifiesto_DEPP_2026-11-13.json",

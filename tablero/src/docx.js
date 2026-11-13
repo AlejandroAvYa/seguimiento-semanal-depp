@@ -43,7 +43,7 @@
 
   function cuerpoMinuta(m) {
     const partes = [pCentrado(m.kind)];
-    if (m.draft) partes.push(pCentrado("BORRADOR · CORTE EN REVISIÓN"));
+    if (m.draft) partes.push(pCentrado(m.draftLabel || "BORRADOR · CORTE EN REVISIÓN"));
     partes.push(pTitulo(m.title), pCentrado(m.recipient, false), pVacio());
     const notas = m.notes || [];
     const ids = notas.map((_, i) => i + 1);

@@ -1,6 +1,23 @@
 # Guía de activación institucional
 
-Esta guía deja operando el corte semanal DEPP en el entorno de Microsoft 365 de la Subsecretaría. Lo que está en este repositorio funciona y está probado con datos ficticios; lo que falta es conectar las cuentas, carpetas y permisos institucionales, que no se pueden configurar desde fuera del tenant.
+## Ruta recomendada: sin informática ni Python
+
+Esta es la forma en operación. No requiere permisos de administrador, instalaciones ni servidores.
+
+| Parte | Qué se hace | Quién |
+|---|---|---|
+| 1 | Carpeta `DEPP_Seguimiento` en OneDrive con `Planillas` y `Capturas`; cada Excel compartido solo con su equipo | Dueño de la carpeta |
+| 2 | Flujo de nube «DEPP - Captura de planillas» en Power Automate: copia los tres Excel a `Capturas/AAAA-MM-DD_HHMM` de lunes a viernes a las 9:00 y 17:00, y el viernes a las 12:00 (corte semanal), con zona horaria Santiago | Dueño de la carpeta, con su cuenta |
+| 3 | Compartir la carpeta `Capturas` con la jefatura con permiso de lectura y sincronizarla en su computador | Dueño de la carpeta y jefatura |
+| 4 | Abrir el tablero (`https://alejandroavya.github.io/seguimiento-semanal-depp/tablero.html`), elegir una vez la carpeta sincronizada y pulsar «Actualizar» cuando se quiera ver lo último | Jefatura |
+
+**Cómo funciona el tablero.** La página solo contiene código. Al elegir la carpeta, el navegador (Edge o Chrome) lee las capturas desde el disco del propio computador, arma cada corte del viernes a las 12:00 comparándolo con el anterior y agrega la última actualización intermedia (9:00 o 17:00) como avance desde el último corte. Los datos no salen del computador ni pasan por GitHub. Edge recuerda la carpeta: las veces siguientes basta con «Actualizar».
+
+**Avisos que muestra el tablero.** Falta la captura que correspondía según el horario (por ejemplo, el flujo falló o OneDrive no ha sincronizado); un corte quedó en revisión (falta un Excel, N° duplicado, registro eliminado, posible reutilización de fila o captura atrasada más de 30 minutos), en cuyo caso la actualización siguiente se compara con el último corte válido.
+
+**Formato de cada captura** (lo deja el flujo): carpeta `AAAA-MM-DD_HHMM` con los tres Excel y `captura.json` (`scheduledAt`, `capturedAt`, `slot`, `verified`).
+
+Las secciones siguientes describen la **alternativa con procesador en Python** (archivos de minuta y detalle generados sin abrir el tablero, o captura por Microsoft Graph). Solo es necesaria si en el futuro se quiere publicar resultados sin intervención de nadie.
 
 ## 1. Arquitectura
 

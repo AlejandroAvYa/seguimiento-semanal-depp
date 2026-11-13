@@ -79,7 +79,7 @@ def cuerpo_minuta(m):
     """Devuelve (xml_del_cuerpo, xml_de_notas_al_pie) para una minuta del motor."""
     partes = [p_centrado(m["kind"])]
     if m.get("draft"):
-        partes.append(p_centrado("BORRADOR · CORTE EN REVISIÓN"))
+        partes.append(p_centrado(m.get("draftLabel") or "BORRADOR · CORTE EN REVISIÓN"))
     partes += [p_titulo(m["title"]), p_centrado(m["recipient"], negrita=False), p_vacio()]
     notas = list(m.get("notes") or [])
     ids = list(range(1, len(notas) + 1))

@@ -1,6 +1,6 @@
 """Genera capturas ficticias de tres viernes y las procesa como lo haría la automatización.
 
-Salida: ejemplos/capturas/<fecha>/ (tres Excel + captura.json) y ejemplos/salidas/.
+Salida: ejemplos/capturas/<AAAA-MM-DD_HHMM>/ (tres Excel + captura.json, igual que el flujo) y ejemplos/salidas/.
 Todos los datos son ficticios. Uso: python herramientas/generar_ejemplos.py
 """
 import datetime as dt
@@ -117,19 +117,39 @@ LIBROS = {"AET": ("Seguimiento_Departamento_Estudios.xlsx", "Análisis Estad. y 
           "CPHDV": ("Seguimiento_CPHDV.xlsx", "CPHDV")}
 
 
-def escribir_captura(cut, destino: pathlib.Path):
+# Actualización intermedia del viernes 13/11 a las 17:00 (después del corte de las 12:00).
+ACTUALIZACION = ("2026-11-13_1700", "2026-11-13")
+reg("CPHDV", 6, dict(received="2026-11-13", request="Responder consulta de prensa sobre homicidios", product="Minuta de cifras para Comunicaciones",
+                     kind="A solicitud", requester="Comunicaciones", owner=CP, due="2026-11-17"),
+    {"2026-11-13_1700": dict(state="En curso", notes="Cifras preliminares en validación.")})
+for area, n, _base, por_corte in R:
+    if (area, n) == ("EE", 4):
+        por_corte["2026-11-13_1700"] = dict(state="Entregado", delivered="2026-11-13", notes="Enviada a DJUR.")
+    if (area, n) == ("EPP", 2):
+        por_corte["2026-11-13_1700"] = dict(state="En curso", notes="Indicadores del primer trimestre cargados.")
+
+
+def utc(fecha, hora):
+    """Hora de Santiago (UTC-3 en noviembre) expresada en UTC, como la escribe Power Automate."""
+    local = dt.datetime.fromisoformat(f"{fecha}T{hora}")
+    return (local + dt.timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def escribir_captura(slot, destino: pathlib.Path, base=None):
+    """Escribe una captura con el formato del flujo de Power Automate (carpeta AAAA-MM-DD_HHMM)."""
     if destino.exists():
         shutil.rmtree(destino)
     destino.mkdir(parents=True)
+    fecha, hhmm = slot.split("_")
     libros = {}
     for archivo, _ in set(LIBROS.values()):
         shutil.copy(RAIZ / "plantillas" / archivo, destino / archivo)
         libros[archivo] = openpyxl.load_workbook(destino / archivo)
-    for area, n, base, por_corte in R:
-        estado = por_corte.get(cut)
+    for area, n, datos_base, por_corte in R:
+        estado = por_corte.get(slot) or (por_corte.get(base) if base else None)
         if estado is None:
             continue
-        datos = {**dict.fromkeys(CLAVES, ""), **base, **estado}
+        datos = {**dict.fromkeys(CLAVES, ""), **datos_base, **estado}
         archivo, pestaña = LIBROS[area]
         ws = libros[archivo][pestaña]
         for i, clave in enumerate(CLAVES):
@@ -137,30 +157,32 @@ def escribir_captura(cut, destino: pathlib.Path):
             if clave in ("received", "due", "delivered"):
                 v = dt.datetime.strptime(v, "%Y-%m-%d") if v else None
             ws.cell(3 + n, 2 + i).value = v or None
-    fijo = dt.datetime.fromisoformat(cut + "T11:00:00")
+    fijo = dt.datetime.fromisoformat(fecha + "T11:00:00")
     for archivo, wb in libros.items():
         wb.properties.created = fijo
         wb.properties.modified = fijo
         wb.properties.lastModifiedBy = "DEPP (ficticio)"
         wb.save(destino / archivo)
+    hora = hhmm[:2] + ":" + hhmm[2:]
     (destino / "captura.json").write_text(json.dumps({
-        "scheduledAt": f"{cut}T12:00:00-03:00", "capturedAt": f"{cut}T12:00:40-03:00",
-        "source": "Ejemplo ficticio (Power Automate)", "verified": True,
-        "files": [{"file": f, "etag": "ficticio"} for f in sorted(libros)]}, ensure_ascii=False, indent=1), encoding="utf-8")
+        "scheduledAt": utc(fecha, hora + ":00"), "capturedAt": utc(fecha, hora + ":40"),
+        "slot": slot, "verified": False}, ensure_ascii=False), encoding="utf-8")
 
 
 def main():
     capturas = RAIZ / "ejemplos" / "capturas"
     salidas = RAIZ / "ejemplos" / "salidas"
-    if salidas.exists():
-        shutil.rmtree(salidas)
+    for ruta in (salidas, capturas):
+        if ruta.exists():
+            shutil.rmtree(ruta)
     for cut in CORTES:
-        escribir_captura(cut, capturas / cut)
+        escribir_captura(f"{cut}_1200", capturas / f"{cut}_1200", base=cut)
         os.environ["DEPP_AHORA"] = f"{cut}T12:05:00-03:00"
         codigo = cli.main(["procesar", "--capturas", str(capturas), "--salidas", str(salidas), "--corte", cut])
         if codigo not in (0, 1):
             raise SystemExit(codigo)
     os.environ.pop("DEPP_AHORA", None)
+    escribir_captura(ACTUALIZACION[0], capturas / ACTUALIZACION[0], base=ACTUALIZACION[1])
 
 
 if __name__ == "__main__":

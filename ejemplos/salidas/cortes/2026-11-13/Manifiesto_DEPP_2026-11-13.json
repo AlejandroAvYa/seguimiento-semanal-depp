@@ -9,27 +9,13 @@
   }
  ],
  "status": "valido",
- "contentHash": "5688edadb256ae8cd74a57ed7ac3466c9b57667350649df6436794ddce9a3065",
+ "contentHash": "1cac467e8305462ee9ce24c8f7d8bd51a5a9b9b4acd41f1b9e444b713360d52a",
  "previousCut": "2026-11-06",
  "capture": {
-  "scheduledAt": "2026-11-13T12:00:00-03:00",
-  "capturedAt": "2026-11-13T12:00:40-03:00",
-  "source": "Ejemplo ficticio (Power Automate)",
-  "verified": true,
-  "files": [
-   {
-    "file": "Seguimiento_CPHDV.xlsx",
-    "etag": "ficticio"
-   },
-   {
-    "file": "Seguimiento_Departamento_Estudios.xlsx",
-    "etag": "ficticio"
-   },
-   {
-    "file": "Seguimiento_Evaluacion_Politicas_Publicas.xlsx",
-    "etag": "ficticio"
-   }
-  ],
+  "scheduledAt": "2026-11-13T15:00:00Z",
+  "capturedAt": "2026-11-13T15:00:40Z",
+  "slot": "2026-11-13_1200",
+  "verified": false,
   "capturedAtLocal": "13/11/2026 12:00",
   "late": false,
   "early": false

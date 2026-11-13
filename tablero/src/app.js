@@ -65,17 +65,25 @@
     if (!st.cache[st.cut]) st.cache[st.cut] = M.analizar(modelo, st.norm[st.cut]);
     return st.cache[st.cut];
   }
-  function estadoDe(cut) { return st.manual.has(cut) ? "manual" : (st.norm[cut]?.status || "valido"); }
+  // Cada corte se identifica por su turno AAAA-MM-DD_HHMM (el corte semanal es el del viernes a las 12:00).
+  const claveDe = c => c.slot || (c.cut + "_1200");
+  const fechaClave = k => k.slice(0, 10);
+  const esIntermedio = k => Boolean(st.norm[k] && st.norm[k].kind === "actualizacion");
+  function etiquetaClave(k) {
+    return esIntermedio(k) ? "Actualización · " + M.momentoSlot(k) : "Corte semanal · vie " + ft(fechaClave(k)) + " 12:00";
+  }
+  function estadoDe(k) { return st.manual.has(k) ? "manual" : (st.norm[k]?.status || "valido"); }
   function cortesOrdenados() { return Object.keys(st.norm).sort(); }
 
   // ------------------------------------------------------------------ carga de datos
   function agregarCorte(raw, manual) {
     const norm = M.leerCorte(modelo, raw);
-    st.raw[norm.cut] = raw;
-    st.norm[norm.cut] = norm;
-    delete st.cache[norm.cut];
-    if (manual) st.manual.add(norm.cut); else st.manual.delete(norm.cut);
-    return norm.cut;
+    const k = claveDe(norm);
+    st.raw[k] = raw;
+    st.norm[k] = norm;
+    delete st.cache[k];
+    if (manual) st.manual.add(k); else st.manual.delete(k);
+    return k;
   }
   function cargarEmbebidos(datos) {
     st.index = datos.index || null;
@@ -83,7 +91,8 @@
     for (const raw of Object.values(datos.cuts || {})) {
       try { agregarCorte(raw, false); } catch (e) { console.warn(e); }
     }
-    st.cut = (st.index && st.index.lastValid && st.norm[st.index.lastValid]) ? st.index.lastValid : cortesOrdenados().slice(-1)[0] || null;
+    const ultimoValido = st.index && st.index.lastValid ? st.index.lastValid + "_1200" : null;
+    st.cut = ultimoValido && st.norm[ultimoValido] ? ultimoValido : cortesOrdenados().slice(-1)[0] || null;
   }
   async function cargarRemoto() {
     // Tablero publicado junto a las salidas (servidor institucional con autenticación).
@@ -99,6 +108,135 @@
       cargarEmbebidos({ index: indice, cuts: cortes, origin: "http" });
       return true;
     } catch (e) { return false; }
+  }
+
+  // ------------------------------------------------------------------ carpeta de capturas en OneDrive
+  const RE_TURNO = /^(\d{4}-\d{2}-\d{2})_(\d{4})$/;
+  const idb = {
+    abrir: () => new Promise((ok, mal) => {
+      const r = indexedDB.open("depp-seguimiento", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("kv");
+      r.onsuccess = () => ok(r.result);
+      r.onerror = () => mal(r.error);
+    }),
+    async get(k) {
+      try {
+        const db = await idb.abrir();
+        return await new Promise(ok => { const t = db.transaction("kv").objectStore("kv").get(k); t.onsuccess = () => ok(t.result || null); t.onerror = () => ok(null); });
+      } catch (e) { return null; }
+    },
+    async set(k, v) {
+      try {
+        const db = await idb.abrir();
+        await new Promise(ok => { const t = db.transaction("kv", "readwrite").objectStore("kv").put(v, k); t.onsuccess = ok; t.onerror = ok; });
+      } catch (e) { /* sin almacenamiento: se vuelve a elegir la carpeta */ }
+    }
+  };
+  async function entradasDesdeHandle(handle) {
+    let raiz = handle;
+    try { raiz = await handle.getDirectoryHandle("Capturas"); } catch (e) { /* se eligió Capturas directamente */ }
+    const salida = [];
+    const leerTurno = async (nombre, h) => {
+      for await (const [archivo, h2] of h.entries()) if (h2.kind === "file") salida.push({ turno: nombre, nombre: archivo, file: () => h2.getFile() });
+    };
+    if (RE_TURNO.test(raiz.name)) await leerTurno(raiz.name, raiz);
+    else for await (const [nombre, h] of raiz.entries()) if (h.kind === "directory" && RE_TURNO.test(nombre)) await leerTurno(nombre, h);
+    return salida;
+  }
+  function entradasDesdeLista(archivos) {
+    return archivos.map(f => {
+      const partes = (f.webkitRelativePath || f.name).split("/");
+      return { turno: partes[partes.length - 2] || "", nombre: partes[partes.length - 1], file: async () => f };
+    }).filter(e => RE_TURNO.test(e.turno));
+  }
+  function metaCaptura(meta) {
+    if (!meta || !meta.capturedAt) return { capturedAt: null, late: false, verified: false };
+    const cap = Date.parse(meta.capturedAt);
+    const prog = meta.scheduledAt ? Date.parse(meta.scheduledAt) : NaN;
+    return { capturedAt: meta.capturedAt, capturedAtLocal: momentoTexto(meta.capturedAt), late: isFinite(prog) && cap - prog > 30 * 60000, verified: Boolean(meta.verified) };
+  }
+  async function construirTurno(entradas, turno, anterior, kind) {
+    const xlsx = [];
+    let meta = null;
+    for (const e of entradas) {
+      if (/\.xlsx$/i.test(e.nombre) && !e.nombre.startsWith("~$")) xlsx.push(await e.file());
+      else if (e.nombre === "captura.json") { try { meta = JSON.parse(await (await e.file()).text()); } catch (err) { meta = null; } }
+    }
+    const conocidos = xlsx.filter(f => modelo.books.some(b => b.file === f.name));
+    const lectura = conocidos.length ? await DEPPLectorXlsx.leerArchivos(modelo, M, conocidos) : { entries: [], coverage: [], problems: [], files: [] };
+    for (const libro of modelo.books) {
+      if (!conocidos.some(f => f.name === libro.file)) {
+        for (const p of libro.prefixes) lectura.problems.push({ code: "archivo_ausente", area: p, message: "Falta " + libro.file + " en la captura " + turno + "." });
+      }
+    }
+    return M.construirCorte(modelo, lectura, fechaClave(turno), anterior, metaCaptura(meta), { kind: kind, slot: turno });
+  }
+  async function procesarCapturas(entradas, nombreCarpeta) {
+    const porTurno = {};
+    for (const e of entradas) (porTurno[e.turno] = porTurno[e.turno] || []).push(e);
+    const turnos = Object.keys(porTurno).sort();
+    if (!turnos.length) throw new Error("No encontré capturas (carpetas AAAA-MM-DD_HHMM). Elige la carpeta DEPP_Seguimiento o su subcarpeta Capturas.");
+    const semanales = turnos.filter(t => t.endsWith("_1200") && M.esViernes(fechaClave(t)));
+    const ultimoSemanal = semanales[semanales.length - 1] || "";
+    const intermedios = turnos.filter(t => !semanales.includes(t) && t > ultimoSemanal);
+    st.raw = {}; st.norm = {}; st.cache = {}; st.manual = new Set(); st.index = null;
+    st.origin = "carpeta";
+    const errores = [];
+    let anterior = null;
+    for (const t of semanales) {
+      try {
+        const corte = await construirTurno(porTurno[t], t, anterior, "semanal");
+        const k = agregarCorte(corte, false);
+        if (corte.status !== "en_revision") anterior = st.norm[k];
+      } catch (e) { errores.push(t + ": " + e.message); }
+    }
+    const ultimoIntermedio = intermedios[intermedios.length - 1];
+    if (ultimoIntermedio) {
+      try { agregarCorte(await construirTurno(porTurno[ultimoIntermedio], ultimoIntermedio, anterior, "actualizacion"), false); }
+      catch (e) { errores.push(ultimoIntermedio + ": " + e.message); }
+    }
+    st.carpeta = { nombre: nombreCarpeta || "", turnos: turnos, leidaEn: new Date().toISOString(), errores: errores };
+    st.cut = cortesOrdenados().slice(-1)[0] || null;
+    st.view = "resumen";
+    render();
+  }
+  async function leerHandle(handle) {
+    estadoCarpeta("Leyendo la carpeta «" + handle.name + "»…");
+    try { await procesarCapturas(await entradasDesdeHandle(handle), handle.name); }
+    catch (e) { estadoCarpeta(""); alertaSimple(e.message); }
+  }
+  function estadoCarpeta(texto) { const el = $("folder-status"); if (el) el.textContent = texto; }
+  async function conectarCarpeta() {
+    if (!window.showDirectoryPicker) { $("file-dir").click(); return; }
+    try {
+      const h = await window.showDirectoryPicker({ id: "depp-seguimiento", mode: "read" });
+      await idb.set("carpeta", h);
+      await leerHandle(h);
+    } catch (e) {
+      if (e.name !== "AbortError") alertaSimple("No se pudo abrir la carpeta: " + e.message);
+    }
+  }
+  async function actualizarCarpeta() {
+    const h = await idb.get("carpeta");
+    if (!h || !h.queryPermission) { conectarCarpeta(); return; }
+    let permiso = await h.queryPermission({ mode: "read" });
+    if (permiso !== "granted") permiso = await h.requestPermission({ mode: "read" });
+    if (permiso === "granted") await leerHandle(h);
+  }
+  /** Último turno programado que ya debería estar en la carpeta (con 45 minutos de margen). */
+  function turnoEsperado() {
+    const h = hoySantiago();
+    for (let i = 0; i < 8; i++) {
+      const dia = M.desplazar(h.dia, -i);
+      const ds = new Date(dia + "T00:00:00Z").getUTCDay();
+      if (ds === 0 || ds === 6) continue;
+      const horas = ds === 5 ? ["1700", "1200", "0900"] : ["1700", "0900"];
+      for (const hh of horas) {
+        const minutos = Number(hh.slice(0, 2)) * 60 + Number(hh.slice(2)) + 45;
+        if (i > 0 || h.hora >= minutos) return dia + "_" + hh;
+      }
+    }
+    return null;
   }
 
   // ------------------------------------------------------------------ marco
@@ -122,10 +260,15 @@
     const cortes = cortesOrdenados();
     $("cutpick").hidden = !cortes.length;
     sel.innerHTML = cortes.slice().reverse().map(c =>
-      '<option value="' + c + '"' + (c === st.cut ? " selected" : "") + ">vie " + ft(c) + " · " + esc(ESTADOS_TXT[estadoDe(c)]) + "</option>").join("");
+      '<option value="' + c + '"' + (c === st.cut ? " selected" : "") + ">" + esc(etiquetaClave(c)) + " · " + esc(ESTADOS_TXT[estadoDe(c)]) + "</option>").join("");
     $("cut-dot").className = "dot " + (st.cut ? estadoDe(st.cut) : "");
     const meta = $("update-meta");
-    if (st.index && st.index.lastRun) {
+    $("btn-actualizar").hidden = st.origin !== "carpeta";
+    if (st.origin === "carpeta" && st.carpeta) {
+      meta.hidden = false;
+      const ultimo = st.carpeta.turnos[st.carpeta.turnos.length - 1];
+      $("update-label").textContent = "Última captura: " + M.momentoSlot(ultimo) + " · leída " + momentoTexto(st.carpeta.leidaEn).slice(11);
+    } else if (st.index && st.index.lastRun) {
       meta.hidden = false;
       const lr = st.index.lastRun;
       $("update-label").textContent = momentoTexto(lr.at) + " · " + (lr.status === "fallido" ? "falló" : ESTADOS_TXT[lr.status] || lr.status);
@@ -138,19 +281,27 @@
   function renderBanners() {
     const out = [];
     const ban = (tipo, html) => out.push('<div class="banner ' + tipo + '">' + html + "</div>");
-    if (st.origin === "demo") ban("info", "<strong>Demostración con datos ficticios.</strong> Los registros, nombres y cifras son ilustrativos. El tablero operativo se abre desde la carpeta institucional de salidas.");
+    if (st.origin === "demo") ban("info", "<strong>Demostración con datos ficticios.</strong> Los registros, nombres y cifras son ilustrativos. El tablero operativo lee la carpeta institucional de capturas en OneDrive.");
     if (st.cut && st.manual.has(st.cut)) ban("info", "<strong>Carga manual sin publicar.</strong> Este corte se armó en el navegador con los Excel seleccionados. Puedes guardarlo como consolidado desde «Calidad y carga».");
+    if (st.cut && esIntermedio(st.cut)) ban("info", "<strong>Actualización intermedia (" + esc(M.momentoSlot(st.cut)) + ").</strong> Muestra el avance desde el último corte semanal. La minuta para Gabinete se arma con el corte del viernes a las 12:00.");
     const lr = st.index && st.index.lastRun;
     if (lr && lr.status === "fallido") ban("bad", "<strong>La actualización del corte del " + ft(lr.cut) + " falló</strong> (" + esc(momentoTexto(lr.at)) + "): " + esc(lr.result) + " Se mantiene el último corte válido.");
-    else if (lr && lr.status === "en_revision" && st.cut !== lr.cut) ban("warn", "<strong>El corte del " + ft(lr.cut) + " quedó en revisión.</strong> Se muestra el último corte válido (" + ft(st.index.lastValid || "") + "). Revisa las incidencias en «Calidad y carga».");
+    else if (lr && lr.status === "en_revision" && fechaClave(st.cut || "") !== lr.cut) ban("warn", "<strong>El corte del " + ft(lr.cut) + " quedó en revisión.</strong> Se muestra el último corte válido (" + ft(st.index.lastValid || "") + "). Revisa las incidencias en «Calidad y carga».");
     if (st.cut && st.norm[st.cut].status === "en_revision") {
       const bloq = (st.norm[st.cut].incidents || []).filter(i => i.level === "bloqueante");
       ban("bad", "<strong>Corte en revisión: cifras preliminares.</strong> " + esc(bloq.slice(0, 2).map(i => i.message).join(" ")) + (bloq.length > 2 ? " (+" + (bloq.length - 2) + " más)" : ""));
     }
+    if (st.origin === "carpeta" && st.carpeta) {
+      const esperado = turnoEsperado();
+      if (esperado && !st.carpeta.turnos.includes(esperado) && esperado > st.carpeta.turnos[st.carpeta.turnos.length - 1]) {
+        ban("warn", "<strong>Falta la captura del " + esc(M.momentoSlot(esperado)) + ".</strong> Revisa el historial del flujo «DEPP - Captura de planillas» en Power Automate o espera a que OneDrive termine de sincronizar, y pulsa «Actualizar».");
+      }
+      if (st.carpeta.errores.length) ban("bad", "<strong>No se pudieron leer algunas capturas:</strong> " + esc(st.carpeta.errores.join(" · ")));
+    }
     if (st.index && (st.origin === "procesador" || st.origin === "http")) {
       const esperado = corteEsperado();
       if (!st.index.cuts.some(c => c.cut === esperado) && (!lr || lr.cut !== esperado)) {
-        ban("warn", "<strong>Corte del viernes " + ft(esperado) + " pendiente.</strong> La actualización programada a las 12:00 aún no se publica. Se muestra el corte del " + ft(st.index.lastValid || st.cut) + ".");
+        ban("warn", "<strong>Corte del viernes " + ft(esperado) + " pendiente.</strong> La actualización programada a las 12:00 aún no se publica. Se muestra el corte del " + ft(st.index.lastValid || fechaClave(st.cut || "")) + ".");
       }
     }
     $("banners").innerHTML = out.join("");
@@ -158,12 +309,20 @@
 
   // ------------------------------------------------------------------ vista inicial sin datos
   function vistaInicio() {
-    return '<div class="start"><div class="page__eyebrow">Seguimiento semanal DEPP</div><h1>No hay cortes cargados</h1>'
-      + "<p>El tablero operativo se abre desde la carpeta de salidas, con el último corte publicado. Para trabajar sin la automatización, carga los tres Excel de los equipos o abre un consolidado.</p>"
-      + '<div class="toolbar" style="justify-content:center;align-items:end;margin-top:18px"><label class="field" style="text-align:left">Fecha de corte (viernes)<input type="date" id="manual-cut" value="' + corteEsperado() + '"></label><button class="btn primary" data-act="xlsx">Cargar los Excel de los equipos</button><button class="btn" data-act="json">Abrir consolidado (.json)</button></div></div>';
+    const pendiente = st.carpetaPendiente;
+    return '<div class="start"><div class="page__eyebrow">Seguimiento semanal DEPP</div><h1>' + (pendiente ? "Actualiza la información" : "Conecta la carpeta de seguimiento") + "</h1>"
+      + "<p>Elige la carpeta <strong>DEPP_Seguimiento</strong> de OneDrive sincronizada en este computador. El tablero lee las capturas de las 9:00 y 17:00 de lunes a viernes, y la del viernes a las 12:00 para el corte semanal, y arma los cortes y la minuta en este navegador. Los datos no se envían a ningún servidor.</p>"
+      + '<div class="toolbar" style="justify-content:center;margin-top:18px">'
+      + (pendiente ? '<button class="btn primary" data-act="actualizar">Actualizar desde «' + esc(pendiente) + '»</button><button class="btn" data-act="carpeta">Elegir otra carpeta</button>'
+        : '<button class="btn primary" data-act="carpeta">Conectar carpeta de OneDrive</button>')
+      + '<button class="btn" data-act="carpeta-alt">Elegir carpeta (método alternativo)</button></div>'
+      + '<p class="status-msg" id="folder-status" aria-live="polite"></p>'
+      + '<details style="margin-top:26px;text-align:left"><summary style="cursor:pointer;font-weight:650">Otras formas de cargar datos</summary>'
+      + '<div class="toolbar" style="align-items:end;margin-top:12px"><label class="field">Fecha de corte (viernes)<input type="date" id="manual-cut" value="' + corteEsperado() + '"></label><button class="btn" data-act="xlsx">Cargar los tres Excel</button><button class="btn" data-act="json">Abrir consolidado (.json)</button></div>'
+      + '<p style="font-size:13px">¿Solo quieres ver cómo funciona? <a href="https://alejandroavya.github.io/seguimiento-semanal-depp/">Abrir la demostración con datos ficticios</a>.</p></details></div>';
   }
   function enlazarInicio() {
-    for (const b of document.querySelectorAll("[data-act]")) b.addEventListener("click", accion);
+    for (const b of $("page").querySelectorAll("[data-act]")) b.addEventListener("click", accion);
   }
 
   // ------------------------------------------------------------------ resumen
@@ -178,9 +337,11 @@
     const solicitudes = a.rows.filter(f => f.support).sort((x, y) => Number(y.decision) - Number(x.decision));
     const proximos = a.rows.filter(f => f.upcoming).sort((x, y) => x.due.localeCompare(y.due));
     const movs = M.movimientos(modelo, corte);
-    const periodo = a.comparing ? "Del viernes " + ft(a.from) + " a las 12:00 al viernes " + ft(a.cut) + " a las 12:00" : "Corte inicial · línea base desde el " + ft(a.from);
+    const intermedio = esIntermedio(st.cut);
+    const periodo = intermedio ? "Avance desde el corte del viernes " + ft(a.from) + " a las 12:00 hasta el " + M.momentoSlot(st.cut)
+      : a.comparing ? "Del viernes " + ft(a.from) + " a las 12:00 al viernes " + ft(a.cut) + " a las 12:00" : "Corte inicial · línea base desde el " + ft(a.from);
     const hstat = (n, l, sub, vista, hot) => '<button class="hstat' + (hot && n ? " is-hot" : "") + '" data-preset="' + vista + '"><div class="hstat__n tnum">' + n + '</div><div class="hstat__l">' + l + '</div><div class="hstat__s">' + sub + "</div></button>";
-    let html = '<section class="hero" aria-label="Cifras del corte"><div class="hero__top"><div><div class="hero__k">Corte semanal DEPP · viernes ' + ft(a.cut) + " · 12:00</div>"
+    let html = '<section class="hero" aria-label="Cifras del corte"><div class="hero__top"><div><div class="hero__k">' + (intermedio ? "Actualización intermedia DEPP · " + esc(M.momentoSlot(st.cut)) : "Corte semanal DEPP · viernes " + ft(a.cut) + " · 12:00") + "</div>"
       + '<div class="hero__t">Estado de los compromisos al ' + fechaLarga(a.cut) + '</div><div class="hero__meta">' + periodo + "</div></div>"
       + '<div class="hero__side"><b class="tnum">' + s.abiertos + "</b> compromisos abiertos · <b class=\"tnum\">" + s.registros + "</b> registrados<br>" + modelo.areas.length + " equipos · estado: " + esc(ESTADOS_TXT[estadoDe(st.cut)]) + "</div></div>"
       + '<div class="hero__stats">'
@@ -255,7 +416,7 @@
   }
   function badge(f) {
     let h = '<span class="badge ' + claseEstado(f.state) + '">' + esc(f.state) + "</span>";
-    if (f.late) h += '<span class="late">Vencido hace ' + M.plural(diasEntre(f.due, st.cut), "día") + "</span>";
+    if (f.late) h += '<span class="late">Vencido hace ' + M.plural(diasEntre(f.due, st.norm[st.cut].cut), "día") + "</span>";
     else if (f.deliveredNow && f.deliveredLate) h += '<span class="late">Fuera de plazo</span>';
     return h;
   }
@@ -302,7 +463,7 @@
     } else if (f.receivedNow) html += '<div class="sub">Movimiento</div><p style="font-size:13px;margin:0">Ingresó en este período' + (f.lateEntry ? " (registro tardío: la fecha de ingreso es anterior al período)." : ".") + "</p>";
     const hist = cortesOrdenados().filter(c => c <= st.cut).map(c => [c, st.norm[c].rows.find(x => x.id === id)]).filter(x => x[1]);
     if (hist.length > 1) {
-      html += '<div class="sub">Historial en los cortes disponibles</div><div class="hist">' + hist.map(([c, r]) => "<div><strong>" + ft(c) + "</strong> · " + esc(r.state) + (r.due ? " · plazo " + ft(r.due) : "") + (r.notes ? '<span class="cell-s" style="display:block">' + esc(r.notes) + "</span>" : "") + "</div>").join("") + "</div>";
+      html += '<div class="sub">Historial en los cortes disponibles</div><div class="hist">' + hist.map(([c, r]) => "<div><strong>" + esc(etiquetaClave(c)) + "</strong> · " + esc(r.state) + (r.due ? " · plazo " + ft(r.due) : "") + (r.notes ? '<span class="cell-s" style="display:block">' + esc(r.notes) + "</span>" : "") + "</div>").join("") + "</div>";
     }
     html += "</div></aside>";
     const root = $("drawer-root");
@@ -319,7 +480,7 @@
   function minutaHTML(m) {
     const notas = m.notes || [];
     let h = '<article class="paper" id="paper" aria-label="Minuta semanal"><img class="plogo" src="' + document.querySelector(".sidebar__logo").src + '" alt="Subsecretaría de Prevención del Delito">'
-      + '<div class="pk">' + esc(m.kind) + "</div>" + (m.draft ? '<div class="pdraft">BORRADOR · CORTE EN REVISIÓN</div>' : "")
+      + '<div class="pk">' + esc(m.kind) + "</div>" + (m.draft ? '<div class="pdraft">' + esc(m.draftLabel || "BORRADOR · CORTE EN REVISIÓN") + "</div>" : "")
       + '<div class="pt">' + esc(m.title) + '</div><div class="pr">' + esc(m.recipient) + "</div>";
     m.sections.forEach((s, i) => {
       h += "<h3>" + (i + 1) + ". " + esc(s.title) + "</h3>";
@@ -336,7 +497,7 @@
     return h + "</article>";
   }
   function minutaTexto(m) {
-    const l = [m.kind, m.draft ? "BORRADOR · CORTE EN REVISIÓN" : "", m.title, m.recipient, ""].filter((x, i) => x || i === 4);
+    const l = [m.kind, m.draft ? (m.draftLabel || "BORRADOR · CORTE EN REVISIÓN") : "", m.title, m.recipient, ""].filter((x, i) => x || i === 4);
     m.sections.forEach((s, i) => {
       l.push((i + 1) + ". " + s.title.toUpperCase());
       for (const p of s.paragraphs || []) l.push(p);
@@ -381,12 +542,13 @@
   function vistaCalidad(a) {
     const corte = st.norm[st.cut];
     const inc = corte.incidents || [];
-    const entrada = st.index && st.index.cuts ? st.index.cuts.find(c => c.cut === st.cut) : null;
+    const entrada = st.index && st.index.cuts && !esIntermedio(st.cut) ? st.index.cuts.find(c => c.cut === corte.cut) : null;
+    const capturada = corte.capturedAt || (entrada && entrada.capturedAt);
     const sinDatos = new Set(inc.filter(i => i.level === "bloqueante" && ["area_sin_datos", "archivo_ausente", "archivo_ilegible", "tabla_ausente", "encabezados_alterados"].includes(i.code)).map(i => i.area));
     let html = '<div class="grid g2"><section class="card"><div class="card__head"><h2 class="card__title" style="margin:0">Estado del corte</h2><span class="card__sub"><span class="dot ' + estadoDe(st.cut) + '"></span> ' + esc(ESTADOS_TXT[estadoDe(st.cut)]) + '</span></div><div class="card__body"><dl class="kv">'
-      + "<dt>Corte</dt><dd>Viernes " + ft(corte.cut) + " a las 12:00 (hora de Santiago)</dd>"
+      + "<dt>" + (esIntermedio(st.cut) ? "Actualización" : "Corte") + "</dt><dd>" + esc(esIntermedio(st.cut) ? M.momentoSlot(st.cut) : "Viernes " + ft(corte.cut) + " a las 12:00") + " (hora de Santiago)</dd>"
       + "<dt>Comparado con</dt><dd>" + (corte.previousRows ? "Corte del " + ft(corte.from) : "Sin corte anterior (línea base)") + "</dd>"
-      + "<dt>Captura</dt><dd>" + (entrada && entrada.capturedAt ? esc(momentoTexto(entrada.capturedAt)) : st.manual.has(st.cut) ? "Carga manual en el navegador" : "Sin registro") + "</dd>"
+      + "<dt>Captura</dt><dd>" + (capturada ? esc(momentoTexto(capturada)) : st.manual.has(st.cut) ? "Carga manual en el navegador" : "Sin registro") + "</dd>"
       + "<dt>Registros válidos</dt><dd>" + corte.rows.length + (corte.rows.some(r => r.held) ? " (incluye " + corte.rows.filter(r => r.held).length + " con versión anterior)" : "") + "</dd>"
       + "<dt>Filas excluidas</dt><dd>" + (corte.rejected || []).length + "</dd>"
       + "<dt>Cobertura</dt><dd>" + modelo.areas.map(x => (sinDatos.has(x.prefix) ? "✗ " : "✓ ") + esc(x.prefix)).join(" · ") + "</dd>"
@@ -405,9 +567,20 @@
       + cortes.map(c => {
         const x = st.cache[c] || (st.cache[c] = M.analizar(modelo, st.norm[c]));
         const s = x.summary;
-        return '<tr data-cut="' + c + '"' + (c === st.cut ? ' style="background:var(--c-blue-soft)"' : "") + '><td class="nowrap"><strong>vie ' + ft(c) + '</strong></td><td><span class="dot ' + estadoDe(c) + '"></span> ' + esc(ESTADOS_TXT[estadoDe(c)]) + '</td><td class="tnum">' + s.ingresos + '</td><td class="tnum">' + s.entregas + '</td><td class="tnum">' + s.avances + '</td><td class="tnum">' + s.abiertos + '</td><td class="tnum">' + x.rows.filter(f => f.active && (f.late || f.blocked)).length + '</td><td class="tnum">' + (st.norm[c].incidents || []).length + "</td></tr>";
+        return '<tr data-cut="' + c + '"' + (c === st.cut ? ' style="background:var(--c-blue-soft)"' : "") + '><td class="nowrap"><strong>' + esc(etiquetaClave(c)) + '</strong></td><td><span class="dot ' + estadoDe(c) + '"></span> ' + esc(ESTADOS_TXT[estadoDe(c)]) + '</td><td class="tnum">' + s.ingresos + '</td><td class="tnum">' + s.entregas + '</td><td class="tnum">' + s.avances + '</td><td class="tnum">' + s.abiertos + '</td><td class="tnum">' + x.rows.filter(f => f.active && (f.late || f.blocked)).length + '</td><td class="tnum">' + (st.norm[c].incidents || []).length + "</td></tr>";
       }).join("") + "</tbody></table></div></div></section>";
     // Carga manual
+    if (st.origin === "carpeta" && st.carpeta) {
+      const c = st.carpeta;
+      html += '<section class="card" style="margin-top:16px"><div class="card__head"><h2 class="card__title" style="margin:0">Carpeta de OneDrive</h2><span class="card__sub">' + M.plural(c.turnos.length, "captura") + '</span></div><div class="card__body"><dl class="kv">'
+        + "<dt>Carpeta</dt><dd>" + esc(c.nombre || "seleccionada") + "</dd>"
+        + "<dt>Leída</dt><dd>" + esc(momentoTexto(c.leidaEn)) + "</dd>"
+        + "<dt>Primera captura</dt><dd>" + esc(M.momentoSlot(c.turnos[0])) + "</dd>"
+        + "<dt>Última captura</dt><dd>" + esc(M.momentoSlot(c.turnos[c.turnos.length - 1])) + "</dd>"
+        + "<dt>Cortes semanales</dt><dd>" + cortesOrdenados().filter(k => !esIntermedio(k)).length + "</dd>"
+        + "</dl>" + (c.errores.length ? '<ul class="inc" style="margin-top:10px">' + c.errores.map(e => '<li><span class="lvl bloqueante">Error</span><span>' + esc(e) + "</span></li>").join("") + "</ul>" : "")
+        + '<div class="toolbar" style="margin-top:12px"><button class="btn primary" data-act="actualizar">Actualizar ahora</button><button class="btn" data-act="carpeta">Cambiar carpeta</button></div></div></section>';
+    }
     const puedeGuardar = st.manual.has(st.cut) && corte.status !== "en_revision";
     html += '<section class="card" style="margin-top:16px"><div class="card__head"><h2 class="card__title" style="margin:0">Carga manual (respaldo)</h2><span class="card__sub">para pruebas o si la automatización no corre</span></div><div class="card__body">'
       + '<p style="margin:0 0 12px;font-size:13px;color:var(--ink-2)">Selecciona las tres copias de los Excel tomadas al corte del viernes a las 12:00. El tablero las compara con el último corte válido cargado anterior a esa fecha y genera la misma minuta que la automatización.</p>'
@@ -427,7 +600,7 @@
       if (!M.fechaValida(cut) || !M.esViernes(cut)) throw new Error("La fecha de corte debe ser un viernes.");
       if (msg) msg.textContent = "Leyendo " + archivos.length + " archivos…";
       const lectura = await DEPPLectorXlsx.leerArchivos(modelo, M, archivos);
-      const previos = cortesOrdenados().filter(c => c < cut && st.norm[c].status !== "en_revision");
+      const previos = cortesOrdenados().filter(c => fechaClave(c) < cut && !esIntermedio(c) && st.norm[c].status !== "en_revision");
       const anterior = previos.length ? st.norm[previos[previos.length - 1]] : null;
       const corte = M.construirCorte(modelo, lectura, cut, anterior, null);
       if (!st.origin) st.origin = "manual";
@@ -460,11 +633,15 @@
     const lineas = [cab.map(q).join(";")].concat(filas.map(f => [f.id, AREAS.get(f.area).name, ft(f.received), f.request, f.product, f.kind, f.requester, f.owner, ft(f.due), f.state, ft(f.delivered), f.notes,
       [f.receivedNow && "Ingreso", f.deliveredNow && "Entrega", f.advancedNow && "Avance"].filter(Boolean).join(", "),
       [f.late && "Vencido", f.blocked && f.active && "Bloqueado", f.support && (f.decision ? "Decisión" : "Apoyo")].filter(Boolean).join(", ")].map(q).join(";")));
-    descargar(new Blob(["﻿" + lineas.join("\r\n")], { type: "text/csv;charset=utf-8" }), "Compromisos_DEPP_" + st.cut + ".csv");
+    descargar(new Blob(["﻿" + lineas.join("\r\n")], { type: "text/csv;charset=utf-8" }), "Compromisos_DEPP_" + nombreArchivo() + ".csv");
   }
+  function nombreArchivo() { return esIntermedio(st.cut) ? st.cut : fechaClave(st.cut); }
   async function accion(e) {
     const act = e.currentTarget.dataset.act;
-    if (act === "xlsx") $("file-xlsx").click();
+    if (act === "carpeta") conectarCarpeta();
+    else if (act === "carpeta-alt") $("file-dir").click();
+    else if (act === "actualizar") actualizarCarpeta();
+    else if (act === "xlsx") $("file-xlsx").click();
     else if (act === "json") $("file-json").click();
     else if (act === "limpiar") { st.filters = Object.assign({}, FILTROS_VACIOS); render(); }
     else if (act === "csv") csv();
@@ -476,10 +653,10 @@
     } else if (act === "word") {
       const m = M.minuta(modelo, st.norm[st.cut], st.full);
       const blob = await DEPPDocx.escribir(m, base64(document.getElementById("plantilla-docx").textContent));
-      descargar(new Blob([blob], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }), "Minuta_DEPP_" + st.cut + (st.full ? "_detalle" : "") + ".docx");
+      descargar(new Blob([blob], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }), "Minuta_DEPP_" + nombreArchivo() + (st.full ? "_detalle" : "") + ".docx");
       $("minuta-status").textContent = "Minuta descargada. Revísala antes de remitirla a Gabinete SPD.";
     } else if (act === "guardar") {
-      descargar(new Blob([JSON.stringify(st.raw[st.cut], null, 1)], { type: "application/json" }), "Corte_DEPP_" + st.cut + ".json");
+      descargar(new Blob([JSON.stringify(st.raw[st.cut], null, 1)], { type: "application/json" }), "Corte_DEPP_" + nombreArchivo() + ".json");
     }
   }
   function enlazarVista() {
@@ -517,8 +694,23 @@
     $("cut-select").addEventListener("change", e => { st.cut = e.target.value; render(); });
     $("file-xlsx").addEventListener("change", e => { const fs = Array.from(e.target.files); e.target.value = ""; if (fs.length) cargarExcel(fs); });
     $("file-json").addEventListener("change", e => { const f = e.target.files[0]; e.target.value = ""; if (f) abrirJSON(f); });
+    $("file-dir").addEventListener("change", async e => {
+      const fs = Array.from(e.target.files);
+      e.target.value = "";
+      if (!fs.length) return;
+      try { await procesarCapturas(entradasDesdeLista(fs), (fs[0].webkitRelativePath || "").split("/")[0]); }
+      catch (err) { alertaSimple(err.message); }
+    });
+    $("btn-actualizar").addEventListener("click", actualizarCarpeta);
     if (embebidos) cargarEmbebidos(embebidos);
-    else if (/^https?:$/.test(location.protocol)) await cargarRemoto();
+    else if (/^https?:$/.test(location.protocol) && await cargarRemoto()) { /* datos publicados en el servidor */ }
+    else {
+      const h = await idb.get("carpeta");
+      if (h && h.queryPermission) {
+        if (await h.queryPermission({ mode: "read" }) === "granted") { await leerHandle(h); return; }
+        st.carpetaPendiente = h.name;
+      }
+    }
     render();
   }
   iniciar();

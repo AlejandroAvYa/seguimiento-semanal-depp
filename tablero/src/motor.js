@@ -49,6 +49,14 @@
     // Viernes más reciente (hoy incluido) para una fecha local de Santiago.
     return desplazar(hoy, -((new Date(hoy + "T00:00:00Z").getUTCDay() + 2) % 7));
   }
+  const DIAS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+  /** «lunes 16/11/2026 a las 09:00» a partir de un turno AAAA-MM-DD_HHMM. */
+  function momentoSlot(slot, dia) {
+    const d = slot ? slot.slice(0, 10) : dia;
+    const nombre = DIAS[new Date(d + "T00:00:00Z").getUTCDay()];
+    const hora = slot && /_\d{4}$/.test(slot) ? " a las " + slot.slice(11, 13) + ":" + slot.slice(13, 15) : "";
+    return nombre + " " + fechaTexto(d) + hora;
+  }
   function plural(n, singular, pluralTxt) {
     return n + " " + (n === 1 ? singular : (pluralTxt || singular + "s"));
   }
@@ -131,9 +139,11 @@
    * lectura: {entries:[registro()], coverage:[prefijos], problems:[{area, code, message}]}
    * anterior: consolidado válido previo o null.  captura: metadatos opcionales.
    */
-  function construirCorte(modelo, lectura, cut, anterior, captura) {
+  function construirCorte(modelo, lectura, cut, anterior, captura, opciones) {
+    const op = opciones || {};
+    const actualizacion = op.kind === "actualizacion";
     if (!fechaValida(cut)) throw new Error("Fecha de corte inválida.");
-    if (anterior && anterior.cut >= cut) throw new Error("El corte anterior debe ser previo a la fecha de corte.");
+    if (anterior && (actualizacion ? anterior.cut > cut : anterior.cut >= cut)) throw new Error("El corte anterior debe ser previo a la fecha de corte.");
     const incidencias = [];
     const agregar = (nivel, codigo, area, mensaje) => incidencias.push({ level: nivel, code: codigo, area: area || "", message: mensaje });
     for (const p of lectura.problems || []) agregar("bloqueante", p.code, p.area, p.message);
@@ -198,7 +208,7 @@
       }
     }
     if (captura && captura.late && !captura.verified) {
-      agregar("bloqueante", "captura_demorada", "", "La captura se realizó a las " + (captura.capturedAtLocal || "?") + " y no se pudo verificar la versión de las 12:00.");
+      agregar("bloqueante", "captura_demorada", "", "La captura se realizó a las " + (captura.capturedAtLocal || "?") + " y no se pudo verificar la versión de la hora programada.");
     }
     const filas = validas.concat(retenidas).sort((a, b) =>
       modelo.areas.findIndex(x => x.prefix === a.area) - modelo.areas.findIndex(x => x.prefix === b.area) || Number(a.number) - Number(b.number));
@@ -214,6 +224,9 @@
       rejected: rechazadas,
       incidents: incidencias
     };
+    if (op.kind) corte.kind = op.kind;
+    if (op.slot) corte.slot = op.slot;
+    if (captura && captura.capturedAt) corte.capturedAt = captura.capturedAt;
     corte.summary = analizar(modelo, corte).summary;
     return corte;
   }
@@ -244,7 +257,10 @@
       rejected: datos.rejected || [],
       incidents: datos.incidents || [],
       summary: datos.summary || null,
-      approval: datos.approval || null
+      approval: datos.approval || null,
+      kind: datos.kind || "semanal",
+      slot: datos.slot || null,
+      capturedAt: datos.capturedAt || null
     };
   }
 
@@ -371,7 +387,11 @@
   function minuta(modelo, corte, completo) {
     const a = analizar(modelo, corte);
     const s = a.summary;
-    const periodo = a.comparing
+    const actualizacion = corte.kind === "actualizacion";
+    const momento = momentoSlot(corte.slot, a.cut);
+    const periodo = actualizacion
+      ? "Avance desde el corte del viernes " + fechaTexto(a.from) + " a las 12:00 hasta el " + momento + ". Es una actualización intermedia; la minuta oficial usa el corte del viernes a las 12:00."
+      : a.comparing
       ? "Del viernes " + fechaTexto(a.from) + " a las 12:00 al viernes " + fechaTexto(a.cut) + " a las 12:00."
       : "Corte inicial al viernes " + fechaTexto(a.cut) + " a las 12:00. Considera ingresos y entregas desde el " + fechaTexto(a.from) + " y fija la línea base para comparar el corte siguiente.";
     const resumen = [
@@ -436,13 +456,14 @@
     if (corte.status === "en_revision") notas.push("Corte en revisión: " + enumerar([...new Set((corte.incidents || []).filter(i => i.level === "bloqueante").map(i => i.message))]));
     const obs = (corte.incidents || []).filter(i => i.level === "observacion").length;
     if (obs) notas.push("El corte registra " + plural(obs, "observación de carga", "observaciones de carga") + "; el detalle completo las identifica por equipo y fila.");
-    notas.push("Fuente: planillas de seguimiento de los equipos DEPP, corte del viernes " + fechaTexto(a.cut) + " a las 12:00 (hora de Santiago). Un compromiso puede registrar más de un movimiento en el período.");
+    notas.push("Fuente: planillas de seguimiento de los equipos DEPP, " + (actualizacion ? "captura del " + momento : "corte del viernes " + fechaTexto(a.cut) + " a las 12:00") + " (hora de Santiago). Un compromiso puede registrar más de un movimiento en el período.");
     return {
       institution: "SUBSECRETARÍA DE PREVENCIÓN DEL DELITO",
       kind: "MINUTA",
       title: "SEGUIMIENTO SEMANAL DE LA DIVISIÓN DE ESTUDIOS Y POLÍTICAS PÚBLICAS (DEPP)",
-      recipient: "Para: Gabinete SPD · Corte del " + fechaTexto(a.cut),
-      draft: corte.status === "en_revision",
+      recipient: actualizacion ? "Para: Jefatura DEPP · Actualización del " + momento : "Para: Gabinete SPD · Corte del " + fechaTexto(a.cut),
+      draft: corte.status === "en_revision" || actualizacion,
+      draftLabel: actualizacion ? "AVANCE INTERMEDIO · NO ES EL CORTE SEMANAL" : "BORRADOR · CORTE EN REVISIÓN",
       full: Boolean(completo),
       sections: secciones,
       notes: notas,
@@ -467,7 +488,7 @@
 
   return {
     FORMATO, FORMATOS_ACEPTADOS, CAMPOS_CAMBIO, ETIQUETAS_CAMBIO, DIAS_PROXIMOS,
-    plegar, desplazar, fechaTexto, fechaValida, fechaExcel, esViernes, viernesDeCorte, plural, enumerar,
+    plegar, desplazar, fechaTexto, momentoSlot, fechaValida, fechaExcel, esViernes, viernesDeCorte, plural, enumerar,
     registro, serializar, construirCorte, leerCorte, analizar, minuta, movimientos
   };
 });
