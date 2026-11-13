@@ -389,7 +389,9 @@
     const s = a.summary;
     const actualizacion = corte.kind === "actualizacion";
     const momento = momentoSlot(corte.slot, a.cut);
-    const periodo = actualizacion
+    const periodo = actualizacion && !a.comparing
+      ? "Actualización del " + momento + ". Aún no hay un corte semanal anterior para comparar; muestra la línea base."
+      : actualizacion
       ? "Avance desde el corte del viernes " + fechaTexto(a.from) + " a las 12:00 hasta el " + momento + ". Es una actualización intermedia; la minuta oficial usa el corte del viernes a las 12:00."
       : a.comparing
       ? "Del viernes " + fechaTexto(a.from) + " a las 12:00 al viernes " + fechaTexto(a.cut) + " a las 12:00."

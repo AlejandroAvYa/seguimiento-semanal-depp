@@ -159,8 +159,13 @@
     const xlsx = [];
     let meta = null;
     for (const e of entradas) {
-      if (/\.xlsx$/i.test(e.nombre) && !e.nombre.startsWith("~$")) xlsx.push(await e.file());
-      else if (e.nombre === "captura.json") { try { meta = JSON.parse(await (await e.file()).text()); } catch (err) { meta = null; } }
+      if (/\.xlsx$/i.test(e.nombre) && !e.nombre.startsWith("~$")) {
+        const f = await conLimite(e.file(), 30000, turno + "/" + e.nombre);
+        await conLimite(f.slice(0, 4).arrayBuffer(), 30000, turno + "/" + e.nombre);
+        xlsx.push(f);
+      } else if (e.nombre === "captura.json") {
+        try { meta = JSON.parse(await (await conLimite(e.file(), 30000, turno + "/captura.json")).text()); } catch (err) { meta = null; }
+      }
     }
     const conocidos = xlsx.filter(f => modelo.books.some(b => b.file === f.name));
     const lectura = conocidos.length ? await DEPPLectorXlsx.leerArchivos(modelo, M, conocidos) : { entries: [], coverage: [], problems: [], files: [] };
@@ -175,7 +180,7 @@
     const porTurno = {};
     for (const e of entradas) (porTurno[e.turno] = porTurno[e.turno] || []).push(e);
     const turnos = Object.keys(porTurno).sort();
-    if (!turnos.length) throw new Error("No encontré capturas (carpetas AAAA-MM-DD_HHMM). Elige la carpeta DEPP_Seguimiento o su subcarpeta Capturas.");
+    if (!turnos.length) throw new Error("No encontré capturas en esa carpeta. Debe ser DEPP_Seguimiento (o su subcarpeta Capturas), que contiene carpetas con nombres como 2026-11-13_1700.");
     const semanales = turnos.filter(t => t.endsWith("_1200") && M.esViernes(fechaClave(t)));
     const ultimoSemanal = semanales[semanales.length - 1] || "";
     const intermedios = turnos.filter(t => !semanales.includes(t) && t > ultimoSemanal);
@@ -183,7 +188,10 @@
     st.origin = "carpeta";
     const errores = [];
     let anterior = null;
+    let n = 0;
+    const total = semanales.length + (intermedios.length ? 1 : 0);
     for (const t of semanales) {
+      estadoCarpeta("Leyendo captura " + (++n) + " de " + total + " (" + M.momentoSlot(t) + ")…");
       try {
         const corte = await construirTurno(porTurno[t], t, anterior, "semanal");
         const k = agregarCorte(corte, false);
@@ -192,6 +200,7 @@
     }
     const ultimoIntermedio = intermedios[intermedios.length - 1];
     if (ultimoIntermedio) {
+      estadoCarpeta("Leyendo captura " + (++n) + " de " + total + " (" + M.momentoSlot(ultimoIntermedio) + ")…");
       try { agregarCorte(await construirTurno(porTurno[ultimoIntermedio], ultimoIntermedio, anterior, "actualizacion"), false); }
       catch (e) { errores.push(ultimoIntermedio + ": " + e.message); }
     }
@@ -201,20 +210,40 @@
     render();
   }
   async function leerHandle(handle) {
-    estadoCarpeta("Leyendo la carpeta «" + handle.name + "»…");
-    try { await procesarCapturas(await entradasDesdeHandle(handle), handle.name); }
-    catch (e) { estadoCarpeta(""); alertaSimple(e.message); }
+    estadoCarpeta("Buscando capturas en «" + handle.name + "»…");
+    try {
+      const entradas = await conLimite(entradasDesdeHandle(handle), 60000, handle.name);
+      estadoCarpeta("Encontré " + M.plural(new Set(entradas.map(e => e.turno)).size, "captura") + " en «" + handle.name + "». Procesando…");
+      await procesarCapturas(entradas, handle.name);
+    } catch (e) {
+      console.error(e);
+      estadoCarpeta("No se pudo leer la carpeta «" + handle.name + "»: " + e.message, "bad");
+    }
   }
-  function estadoCarpeta(texto) { const el = $("folder-status"); if (el) el.textContent = texto; }
+  function estadoCarpeta(texto, tipo) {
+    const el = $("folder-status");
+    if (el) el.textContent = texto;
+    const b = $("banners");
+    if (texto) b.innerHTML = '<div class="banner ' + (tipo || "info") + '">' + esc(texto) + "</div>";
+  }
+  /** Espera un archivo con un tiempo límite: en OneDrive un archivo «solo en la nube» puede tardar en descargarse. */
+  function conLimite(promesa, ms, nombre) {
+    return Promise.race([promesa, new Promise((_, mal) => setTimeout(() => mal(new Error(
+      "No se pudo leer «" + nombre + "» en " + Math.round(ms / 1000) + " segundos. En el Explorador de Windows haz clic derecho sobre la carpeta Capturas › «Mantener siempre en este dispositivo» y vuelve a intentarlo.")), ms))]);
+  }
   async function conectarCarpeta() {
     if (!window.showDirectoryPicker) { $("file-dir").click(); return; }
+    let h;
     try {
-      const h = await window.showDirectoryPicker({ id: "depp-seguimiento", mode: "read" });
-      await idb.set("carpeta", h);
-      await leerHandle(h);
+      h = await window.showDirectoryPicker({ id: "depp-seguimiento", mode: "read" });
     } catch (e) {
-      if (e.name !== "AbortError") alertaSimple("No se pudo abrir la carpeta: " + e.message);
+      estadoCarpeta(e.name === "AbortError"
+        ? "No se recibió la carpeta. Si el navegador preguntó si permites ver los archivos, hay que aceptar «Ver archivos» (View files). Vuelve a pulsar «Conectar carpeta de OneDrive»."
+        : "El navegador no permitió abrir la carpeta: " + e.message + " Prueba con «Elegir carpeta (método alternativo)».", "warn");
+      return;
     }
+    await idb.set("carpeta", h);
+    await leerHandle(h);
   }
   async function actualizarCarpeta() {
     const h = await idb.get("carpeta");
@@ -338,7 +367,8 @@
     const proximos = a.rows.filter(f => f.upcoming).sort((x, y) => x.due.localeCompare(y.due));
     const movs = M.movimientos(modelo, corte);
     const intermedio = esIntermedio(st.cut);
-    const periodo = intermedio ? "Avance desde el corte del viernes " + ft(a.from) + " a las 12:00 hasta el " + M.momentoSlot(st.cut)
+    const periodo = intermedio && !a.comparing ? "Línea base al " + M.momentoSlot(st.cut) + ": aún no hay un corte semanal anterior para comparar"
+      : intermedio ? "Avance desde el corte del viernes " + ft(a.from) + " a las 12:00 hasta el " + M.momentoSlot(st.cut)
       : a.comparing ? "Del viernes " + ft(a.from) + " a las 12:00 al viernes " + ft(a.cut) + " a las 12:00" : "Corte inicial · línea base desde el " + ft(a.from);
     const hstat = (n, l, sub, vista, hot) => '<button class="hstat' + (hot && n ? " is-hot" : "") + '" data-preset="' + vista + '"><div class="hstat__n tnum">' + n + '</div><div class="hstat__l">' + l + '</div><div class="hstat__s">' + sub + "</div></button>";
     let html = '<section class="hero" aria-label="Cifras del corte"><div class="hero__top"><div><div class="hero__k">' + (intermedio ? "Actualización intermedia DEPP · " + esc(M.momentoSlot(st.cut)) : "Corte semanal DEPP · viernes " + ft(a.cut) + " · 12:00") + "</div>"
@@ -697,9 +727,11 @@
     $("file-dir").addEventListener("change", async e => {
       const fs = Array.from(e.target.files);
       e.target.value = "";
-      if (!fs.length) return;
-      try { await procesarCapturas(entradasDesdeLista(fs), (fs[0].webkitRelativePath || "").split("/")[0]); }
-      catch (err) { alertaSimple(err.message); }
+      if (!fs.length) { estadoCarpeta("La carpeta elegida no tiene archivos o el navegador no los entregó.", "warn"); return; }
+      const nombre = (fs[0].webkitRelativePath || "").split("/")[0];
+      estadoCarpeta("Recibí " + M.plural(fs.length, "archivo") + " de «" + nombre + "». Procesando…");
+      try { await procesarCapturas(entradasDesdeLista(fs), nombre); }
+      catch (err) { console.error(err); estadoCarpeta(err.message, "bad"); }
     });
     $("btn-actualizar").addEventListener("click", actualizarCarpeta);
     if (embebidos) cargarEmbebidos(embebidos);

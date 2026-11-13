@@ -454,7 +454,9 @@ def minuta(modelo, corte, completo=False):
     s = a["summary"]
     actualizacion = corte.get("kind") == "actualizacion"
     momento = momento_slot(corte.get("slot"), a["cut"])
-    if actualizacion:
+    if actualizacion and not a["comparing"]:
+        periodo = f"Actualización del {momento}. Aún no hay un corte semanal anterior para comparar; muestra la línea base."
+    elif actualizacion:
         periodo = (f"Avance desde el corte del viernes {fecha_texto(a['from'])} a las 12:00 hasta el {momento}. "
                    "Es una actualización intermedia; la minuta oficial usa el corte del viernes a las 12:00.")
     elif a["comparing"]:
