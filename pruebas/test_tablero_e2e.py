@@ -239,3 +239,52 @@ def test_captura_horaria_y_boton_actualizar(navegador, tmp_path):
     assert pg.locator("#cut-select option").count() == 4
     assert "Falta la captura" not in pg.locator("#banners").inner_text()
     assert not errores
+
+
+def test_volver_y_ayuda(navegador, tmp_path):
+    """«Volver» regresa a la pantalla anterior (también la flecha atrás del navegador) y la ayuda se abre y se cierra."""
+    capturas = tmp_path / "Capturas"
+    shutil.copytree(CAPTURAS, capturas)
+    shutil.copy(RAIZ / "docs" / "Tablero_DEPP.html", capturas / "Tablero_DEPP.html")
+    pg, errores = pagina(navegador, (capturas / "Tablero_DEPP.html").as_uri() + "?ahora=2026-11-13T17:40")
+    pg.wait_for_timeout(3000)
+    assert pg.locator("#btn-volver").is_hidden()
+    pg.click('.hstat[data-preset="alertas"]')
+    assert pg.locator("#view-title").inner_text() == "Compromisos"
+    assert "Atrasados o bloqueados" in pg.locator(".context").inner_text()
+    pg.click('tbody tr[data-open] >> nth=0')
+    assert pg.locator(".drawer").count() == 1
+    pg.click(".drawer__back")
+    assert pg.locator(".drawer").count() == 0
+    assert pg.locator("#view-title").inner_text() == "Compromisos"
+    pg.click("#btn-volver")
+    pg.wait_for_timeout(300)
+    assert pg.locator("#view-title").inner_text() == "Resumen"
+    assert pg.locator("#btn-volver").is_hidden()
+    # Flecha atrás y adelante del navegador.
+    pg.click('.nav__item[data-view="minuta"]')
+    pg.go_back()
+    pg.wait_for_timeout(300)
+    assert pg.locator("#view-title").inner_text() == "Resumen"
+    pg.go_forward()
+    pg.wait_for_timeout(300)
+    assert pg.locator("#view-title").inner_text() == "Minuta semanal"
+    # En una actualización, la minuta ofrece pasar al corte semanal oficial.
+    pg.click('[data-act="ir-semanal"]')
+    assert pg.locator("#cut-select").input_value() == "2026-11-13_1200"
+    pg.click("#btn-ayuda")
+    assert "Cómo leer este tablero" in pg.locator(".drawer").inner_text()
+    pg.keyboard.press("Escape")
+    assert pg.locator(".drawer").count() == 0
+    assert not errores
+
+
+def test_tablero_sin_capturas_explica_que_revisar(navegador, tmp_path):
+    capturas = tmp_path / "Capturas"
+    capturas.mkdir()
+    shutil.copy(RAIZ / "docs" / "Tablero_DEPP.html", capturas / "Tablero_DEPP.html")
+    pg, errores = pagina(navegador, (capturas / "Tablero_DEPP.html").as_uri())
+    pg.wait_for_timeout(2500)
+    texto = pg.locator("#page").inner_text()
+    assert "Aún no hay datos para mostrar" in texto and "Mantener siempre en este dispositivo" in texto
+    assert not errores

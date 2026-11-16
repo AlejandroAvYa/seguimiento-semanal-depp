@@ -8,10 +8,10 @@
   const AREAS = new Map(modelo.areas.map(a => [a.prefix, a]));
   const ESTADOS_TXT = { valido: "Válido", valido_con_observaciones: "Válido con observaciones", en_revision: "En revisión", manual: "Carga manual sin publicar" };
   const VISTAS = {
-    resumen: ["Resumen del corte", "Qué se entregó, qué avanzó y qué requiere atención"],
-    compromisos: ["Compromisos", "Registro consolidado de los cuatro equipos, con filtros y ficha de detalle"],
-    minuta: ["Minuta semanal", "Generada con el mismo corte que alimenta el tablero"],
-    calidad: ["Calidad y carga", "Estado de la actualización, incidencias, historial y carga manual"]
+    resumen: ["Resumen", "Qué se entregó, qué avanzó y qué requiere atención"],
+    compromisos: ["Compromisos", "Todos los compromisos de los equipos. Haz clic en una fila para ver su ficha"],
+    minuta: ["Minuta semanal", "Documento para Gabinete SPD, armado con los mismos datos del tablero"],
+    calidad: ["Estado de los datos", "Capturas recibidas, avisos e historial de cortes"]
   };
   const FILTROS_VACIOS = { area: "", state: "", requester: "", view: "all", q: "" };
 
@@ -213,7 +213,6 @@
     const ultimo = cortesOrdenados().slice(-1)[0] || null;
     // Al refrescar se mantiene la vista; si se miraba la última captura, se pasa a la nueva.
     st.cut = previo && st.norm[previo] && !esIntermedio(previo) ? previo : ultimo;
-    if (!previo) st.view = "resumen";
     render();
   }
   async function leerHandle(handle) {
@@ -317,6 +316,7 @@
     await procesarCapturas(entradas, "Capturas");
     st.origin = "carpeta";
     st.automatico = true;
+    st.sinCapturas = false;
     render();
     if (!st.refrescoAuto) st.refrescoAuto = setInterval(() => { st.cutPrevio = st.cut; cargarAutomatico(); }, 30 * 60000);
     return true;
@@ -335,6 +335,69 @@
       }
     }
     return null;
+  }
+
+  // ------------------------------------------------------------------ navegación (botón Volver y atrás del navegador)
+  const posicion = () => (history.state && history.state.depp ? history.state.i : 0);
+  const estadoNav = extra => Object.assign({ depp: true, i: posicion(), view: st.view, filters: Object.assign({}, st.filters) }, extra || {});
+  /** Cambia de pantalla dejando un paso en el historial, para poder volver. */
+  function ir(cambios) {
+    // Desde una ficha abierta se reemplaza su paso: «Volver» lleva a la pantalla de antes y no reabre la ficha.
+    const enPanel = Boolean(history.state && history.state.depp && (history.state.ficha || history.state.ayuda));
+    cerrarPanel();
+    if (cambios.view) st.view = cambios.view;
+    if (cambios.filters) st.filters = Object.assign({}, FILTROS_VACIOS, cambios.filters);
+    const nuevo = estadoNav({ i: posicion() + (enPanel ? 0 : 1) });
+    if (enPanel) history.replaceState(nuevo, "", "#" + st.view);
+    else history.pushState(nuevo, "", "#" + st.view);
+    render();
+    window.scrollTo(0, 0);
+  }
+  function volver() {
+    if (st.panel) { cerrarPanelUsuario(); return; }
+    if (posicion() > 0) history.back();
+    else ir({ view: "resumen", filters: FILTROS_VACIOS });
+  }
+  function alVolverHistorial(e) {
+    if (st.ignorarPop) { st.ignorarPop = false; return; }
+    const s = e.state && e.state.depp ? e.state : { view: "resumen", filters: FILTROS_VACIOS };
+    st.view = VISTAS[s.view] ? s.view : "resumen";
+    st.filters = Object.assign({}, FILTROS_VACIOS, s.filters);
+    cerrarPanel();
+    render();
+    if (s.ficha && st.cut) abrirFicha(s.ficha, true);
+    else if (s.ayuda) abrirAyuda(true);
+  }
+  /** Panel lateral (ficha o ayuda). */
+  function abrirPanel(html, tipo, desdeHistorial, extra) {
+    const root = $("drawer-root");
+    if (!st.panel) st.focoPrevio = document.activeElement;
+    root.innerHTML = html;
+    st.panel = tipo;
+    if (!desdeHistorial) {
+      // Si ya hay un panel abierto se reemplaza el paso, para que «Volver» lleve a la lista y no a la ficha anterior.
+      const reemplazar = history.state && history.state.depp && (history.state.ficha || history.state.ayuda);
+      const nuevo = estadoNav(Object.assign({ i: posicion() + (reemplazar ? 0 : 1) }, extra));
+      if (reemplazar) history.replaceState(nuevo, "", location.hash || "#" + st.view);
+      else history.pushState(nuevo, "", location.hash || "#" + st.view);
+    }
+    for (const el of root.querySelectorAll("[data-close]")) el.addEventListener("click", cerrarPanelUsuario);
+    for (const el of root.querySelectorAll("[data-open]")) el.addEventListener("click", () => abrirFicha(el.dataset.open));
+    const foco = root.querySelector(".drawer__back") || root.querySelector(".drawer__close");
+    if (foco) foco.focus();
+    renderTopbar();
+  }
+  function cerrarPanel() {
+    if (!st.panel) return;
+    $("drawer-root").innerHTML = "";
+    st.panel = null;
+    if (st.focoPrevio && st.focoPrevio.isConnected && st.focoPrevio.focus) st.focoPrevio.focus();
+    st.focoPrevio = null;
+    renderTopbar();
+  }
+  function cerrarPanelUsuario() {
+    cerrarPanel();
+    if (history.state && history.state.depp && (history.state.ficha || history.state.ayuda)) { st.ignorarPop = true; history.back(); }
   }
 
   // ------------------------------------------------------------------ marco
@@ -357,15 +420,17 @@
     const sel = $("cut-select");
     const cortes = cortesOrdenados();
     $("cutpick").hidden = !cortes.length;
+    $("statusbar").hidden = !cortes.length;
     sel.innerHTML = cortes.slice().reverse().map(c =>
       '<option value="' + c + '"' + (c === st.cut ? " selected" : "") + ">" + esc(etiquetaClave(c)) + " · " + esc(ESTADOS_TXT[estadoDe(c)]) + "</option>").join("");
     $("cut-dot").className = "dot " + (st.cut ? estadoDe(st.cut) : "");
     const meta = $("update-meta");
     $("btn-actualizar").hidden = st.origin !== "carpeta";
+    $("btn-volver").hidden = !st.cut || (st.view === "resumen" && !st.panel && posicion() === 0);
     if (st.origin === "carpeta" && st.carpeta) {
       meta.hidden = false;
       const ultimo = st.carpeta.turnos[st.carpeta.turnos.length - 1];
-      $("update-label").textContent = "Última captura: " + M.momentoSlot(ultimo) + " · leída " + momentoTexto(st.carpeta.leidaEn).slice(11);
+      $("update-label").textContent = "Captura del " + M.momentoSlot(ultimo) + " · revisado a las " + momentoTexto(st.carpeta.leidaEn).slice(11);
     } else if (st.index && st.index.lastRun) {
       meta.hidden = false;
       const lr = st.index.lastRun;
@@ -380,11 +445,11 @@
     const out = [];
     const ban = (tipo, html) => out.push('<div class="banner ' + tipo + '">' + html + "</div>");
     if (st.origin === "demo") ban("info", "<strong>Demostración con datos ficticios.</strong> Los registros, nombres y cifras son ilustrativos. El tablero operativo lee la carpeta institucional de capturas en OneDrive.");
-    if (st.cut && st.manual.has(st.cut)) ban("info", "<strong>Carga manual sin publicar.</strong> Este corte se armó en el navegador con los Excel seleccionados. Puedes guardarlo como consolidado desde «Calidad y carga».");
-    if (st.cut && esIntermedio(st.cut)) ban("info", "<strong>Actualización intermedia (" + esc(M.momentoSlot(st.cut)) + ").</strong> Muestra el avance desde el último corte semanal. La minuta para Gabinete se arma con el corte del viernes a las 12:00.");
+    if (st.cut && st.manual.has(st.cut)) ban("info", "<strong>Carga manual sin publicar.</strong> Este corte se armó en el navegador con los Excel seleccionados. Puedes guardarlo como consolidado desde «Estado de los datos».");
+    if (st.cut && esIntermedio(st.cut)) ban("info", "<strong>Actualización intermedia: estás viendo los datos del " + esc(M.momentoSlot(st.cut)) + ".</strong> Muestra lo que cambió desde el último corte semanal. La minuta oficial para Gabinete se arma con el corte del viernes a las 12:00 (elígelo en «Ver datos de»).");
     const lr = st.index && st.index.lastRun;
     if (lr && lr.status === "fallido") ban("bad", "<strong>La actualización del corte del " + ft(lr.cut) + " falló</strong> (" + esc(momentoTexto(lr.at)) + "): " + esc(lr.result) + " Se mantiene el último corte válido.");
-    else if (lr && lr.status === "en_revision" && fechaClave(st.cut || "") !== lr.cut) ban("warn", "<strong>El corte del " + ft(lr.cut) + " quedó en revisión.</strong> Se muestra el último corte válido (" + ft(st.index.lastValid || "") + "). Revisa las incidencias en «Calidad y carga».");
+    else if (lr && lr.status === "en_revision" && fechaClave(st.cut || "") !== lr.cut) ban("warn", "<strong>El corte del " + ft(lr.cut) + " quedó en revisión.</strong> Se muestra el último corte válido (" + ft(st.index.lastValid || "") + "). Revisa los avisos en «Estado de los datos».");
     if (st.cut && st.norm[st.cut].status === "en_revision") {
       const bloq = (st.norm[st.cut].incidents || []).filter(i => i.level === "bloqueante");
       ban("bad", "<strong>Corte en revisión: cifras preliminares.</strong> " + esc(bloq.slice(0, 2).map(i => i.message).join(" ")) + (bloq.length > 2 ? " (+" + (bloq.length - 2) + " más)" : ""));
@@ -392,7 +457,7 @@
     if (st.origin === "carpeta" && st.carpeta) {
       const esperado = turnoEsperado();
       if (esperado && !st.carpeta.turnos.includes(esperado) && esperado > st.carpeta.turnos[st.carpeta.turnos.length - 1]) {
-        ban("warn", "<strong>Falta la captura del " + esc(M.momentoSlot(esperado)) + ".</strong> Revisa el historial del flujo «DEPP - Captura de planillas» en Power Automate o espera a que OneDrive termine de sincronizar, y pulsa «Actualizar».");
+        ban("warn", "<strong>Falta la captura del " + esc(M.momentoSlot(esperado)) + ".</strong> Se muestran los datos de la captura anterior. Puede ser que OneDrive aún esté sincronizando: espera unos minutos y pulsa «↻ Actualizar». Si el aviso sigue por más de una hora, avisa a quien administra el flujo «DEPP - Captura de planillas».");
       }
       if (st.carpeta.errores.length) ban("bad", "<strong>No se pudieron leer algunas capturas:</strong> " + esc(st.carpeta.errores.join(" · ")));
     }
@@ -408,16 +473,27 @@
   // ------------------------------------------------------------------ vista inicial sin datos
   function vistaInicio() {
     const pendiente = st.carpetaPendiente;
-    return '<div class="start"><div class="page__eyebrow">Seguimiento semanal DEPP</div><h1>' + (pendiente ? "Actualiza la información" : "Conecta la carpeta de seguimiento") + "</h1>"
-      + "<p>Elige la carpeta <strong>DEPP_Seguimiento</strong> de OneDrive sincronizada en este computador. El tablero lee las capturas que se toman cada hora de lunes a viernes, y usa la del viernes a las 12:00 como corte semanal, y arma los cortes y la minuta en este navegador. Los datos no se envían a ningún servidor.</p>"
-      + '<div class="toolbar" style="justify-content:center;margin-top:18px">'
+    const conectar = '<div class="toolbar" style="justify-content:center;margin-top:14px">'
       + (pendiente ? '<button class="btn primary" data-act="actualizar">Actualizar desde «' + esc(pendiente) + '»</button><button class="btn" data-act="carpeta">Elegir otra carpeta</button>'
         : '<button class="btn primary" data-act="carpeta">Conectar carpeta de OneDrive</button>')
       + '<button class="btn" data-act="carpeta-alt">Elegir carpeta (método alternativo)</button></div>'
-      + '<p class="status-msg" id="folder-status" aria-live="polite"></p>'
-      + '<details style="margin-top:26px;text-align:left"><summary style="cursor:pointer;font-weight:650">Otras formas de cargar datos</summary>'
+      + '<p class="status-msg" id="folder-status" aria-live="polite"></p>';
+    const otras = '<details><summary>Otras formas de cargar datos</summary>'
       + '<div class="toolbar" style="align-items:end;margin-top:12px"><label class="field">Fecha de corte (viernes)<input type="date" id="manual-cut" value="' + corteEsperado() + '"></label><button class="btn" data-act="xlsx">Cargar los tres Excel</button><button class="btn" data-act="json">Abrir consolidado (.json)</button></div>'
-      + '<p style="font-size:13px">¿Solo quieres ver cómo funciona? <a href="https://alejandroavya.github.io/seguimiento-semanal-depp/">Abrir la demostración con datos ficticios</a>.</p></details></div>';
+      + '<p style="font-size:13px">¿Solo quieres ver cómo funciona? <a href="https://alejandroavya.github.io/seguimiento-semanal-depp/">Abrir la demostración con datos ficticios</a>.</p></details>';
+    if (st.sinCapturas) {
+      // Tablero abierto desde el escritorio (dentro de Capturas) sin capturas a la vista.
+      return '<div class="start"><div class="page__eyebrow">Seguimiento semanal DEPP</div><h1>Aún no hay datos para mostrar</h1>'
+        + "<p>Este tablero lee las capturas guardadas en su misma carpeta (<strong>Capturas</strong>, en OneDrive) y no encontró ninguna. Revisa:</p>"
+        + "<ol><li>Que el archivo <strong>Tablero_DEPP.html</strong> esté dentro de la carpeta <strong>Capturas</strong>.</li>"
+        + "<li>Que la carpeta esté marcada con <strong>«Mantener siempre en este dispositivo»</strong> (clic derecho › OneDrive).</li>"
+        + "<li>Que OneDrive haya terminado de sincronizar (ícono de nube en la barra de tareas).</li></ol>"
+        + '<div class="toolbar" style="justify-content:center;margin-top:18px"><button class="btn primary" data-act="reintentar">↻ Buscar de nuevo</button></div>'
+        + '<details><summary>Conecta la carpeta de seguimiento de otra forma</summary>' + conectar + "</details>" + otras + "</div>";
+    }
+    return '<div class="start"><div class="page__eyebrow">Seguimiento semanal DEPP</div><h1>' + (pendiente ? "Actualiza la información" : "Conecta la carpeta de seguimiento") + "</h1>"
+      + "<p>Elige la carpeta <strong>DEPP_Seguimiento</strong> de OneDrive sincronizada en este computador. El tablero lee las capturas que se toman cada hora de lunes a viernes, usa la del viernes a las 12:00 como corte semanal y arma los cortes y la minuta en este navegador. Los datos no se envían a ningún servidor.</p>"
+      + conectar + otras + "</div>";
   }
   function enlazarInicio() {
     for (const b of $("page").querySelectorAll("[data-act]")) b.addEventListener("click", accion);
@@ -439,7 +515,7 @@
     const periodo = intermedio && !a.comparing ? "Línea base al " + M.momentoSlot(st.cut) + ": aún no hay un corte semanal anterior para comparar"
       : intermedio ? "Avance desde el corte del viernes " + ft(a.from) + " a las 12:00 hasta el " + M.momentoSlot(st.cut)
       : a.comparing ? "Del viernes " + ft(a.from) + " a las 12:00 al viernes " + ft(a.cut) + " a las 12:00" : "Corte inicial · línea base desde el " + ft(a.from);
-    const hstat = (n, l, sub, vista, hot) => '<button class="hstat' + (hot && n ? " is-hot" : "") + '" data-preset="' + vista + '"><div class="hstat__n tnum">' + n + '</div><div class="hstat__l">' + l + '</div><div class="hstat__s">' + sub + "</div></button>";
+    const hstat = (n, l, sub, vista, hot) => '<button class="hstat' + (hot && n ? " is-hot" : "") + '" data-preset="' + vista + '"><div class="hstat__n tnum">' + n + '</div><div class="hstat__l">' + l + '</div><div class="hstat__s">' + sub + '</div><div class="hstat__go">Ver lista →</div></button>';
     let html = '<section class="hero" aria-label="Cifras del corte"><div class="hero__top"><div><div class="hero__k">' + (intermedio ? "Actualización intermedia DEPP · " + esc(M.momentoSlot(st.cut)) : "Corte semanal DEPP · viernes " + ft(a.cut) + " · 12:00") + "</div>"
       + '<div class="hero__t">Estado de los compromisos al ' + fechaLarga(a.cut) + '</div><div class="hero__meta">' + periodo + "</div></div>"
       + '<div class="hero__side"><b class="tnum">' + s.abiertos + "</b> compromisos abiertos · <b class=\"tnum\">" + s.registros + "</b> registrados<br>" + modelo.areas.length + " equipos · estado: " + esc(ESTADOS_TXT[estadoDe(st.cut)]) + "</div></div>"
@@ -450,7 +526,6 @@
       + hstat(alertas.length, "Atrasados o bloqueados", M.plural(s.vencidos, "vencido") + " · " + M.plural(s.bloqueados, "bloqueado"), "alertas", true)
       + hstat(s.apoyos, "Requieren decisión o apoyo", M.plural(s.decisiones, "decisión", "decisiones") + " · " + M.plural(s.apoyos - s.decisiones, "apoyo"), "solicitudes", true)
       + "</div></section>";
-    html += '<div class="legend" aria-hidden="true"><span><i class="s-pend"></i>Pendiente</span><span><i class="s-curso"></i>En curso</span><span><i class="s-rev"></i>En revisión</span><span><i class="s-bloq"></i>Bloqueado</span><span><i class="s-venc"></i>Vencido (abierto)</span></div>';
     // Atención y decisiones
     html += '<div class="grid g2">';
     html += '<section class="card"><div class="card__head"><h2 class="card__title red" style="margin:0">Bloqueos y atrasos</h2><span class="card__sub">' + alertas.length + ' al corte</span></div><div class="card__body"><ul class="list">'
@@ -462,7 +537,7 @@
     html += "</div>";
     // Por equipo y próximos
     html += '<div class="grid g2" style="margin-top:16px">';
-    html += '<section class="card"><div class="card__head"><h2 class="card__title" style="margin:0">Compromisos abiertos por equipo</h2><span class="card__sub">según estado al corte</span></div><div class="card__body">';
+    html += '<section class="card"><div class="card__head"><h2 class="card__title" style="margin:0">Compromisos abiertos por equipo</h2><span class="card__sub">clic en un equipo para ver su lista</span></div><div class="card__body"><div class="legend" aria-hidden="true"><span><i class="s-pend"></i>Pendiente</span><span><i class="s-curso"></i>En curso</span><span><i class="s-rev"></i>En revisión</span><span><i class="s-bloq"></i>Bloqueado</span><span><i class="s-venc"></i>Vencido</span></div>';
     for (const area of modelo.areas) {
       const propios = a.rows.filter(f => f.area === area.prefix && f.active);
       const sa = s.porArea[area.prefix];
@@ -523,15 +598,25 @@
     const F = st.filters;
     const filas = filtrar(a);
     const opt = (v, t, sel) => '<option value="' + esc(v) + '"' + (v === sel ? " selected" : "") + ">" + esc(t) + "</option>";
-    let html = '<div class="filterbar" role="search"><span class="filterbar__label">Filtros</span>'
+    const partes = [];
+    if (F.view !== "all") partes.push(PRESETS[F.view][0]);
+    if (F.area) partes.push(AREAS.get(F.area).name);
+    if (F.state) partes.push("estado «" + F.state + "»");
+    if (F.requester) partes.push("requirente " + F.requester);
+    if (F.q.trim()) partes.push("búsqueda «" + F.q.trim() + "»");
+    let html = partes.length
+      ? '<div class="context no-print"><div class="context__t"><span class="context__k">Estás viendo</span><strong>' + esc(partes.join(" · ")) + "</strong> · " + M.plural(filas.length, "compromiso")
+        + '</div><button class="backbtn" data-act="volver"><span aria-hidden="true">←</span>Volver</button><button class="btn" data-act="limpiar">Ver todos los compromisos</button></div>'
+      : "";
+    html += '<div class="filterbar" role="search"><span class="filterbar__label">Filtros</span>'
       + '<select class="fsel' + (F.area ? " is-set" : "") + '" data-f="area" aria-label="Equipo">' + opt("", "Todos los equipos", F.area) + modelo.areas.map(x => opt(x.prefix, x.name, F.area)).join("") + "</select>"
       + '<select class="fsel' + (F.state ? " is-set" : "") + '" data-f="state" aria-label="Estado">' + opt("", "Todos los estados", F.state) + modelo.states.map(x => opt(x, x, F.state)).join("") + "</select>"
       + '<select class="fsel' + (F.requester ? " is-set" : "") + '" data-f="requester" aria-label="Requirente">' + opt("", "Todos los requirentes", F.requester) + modelo.requesters.map(x => opt(x, x, F.requester)).join("") + "</select>"
       + '<select class="fsel' + (F.view !== "all" ? " is-set" : "") + '" data-f="view" aria-label="Vista">' + Object.entries(PRESETS).map(([k, v]) => opt(k, v[0], F.view)).join("") + "</select>"
       + '<input class="fsearch" type="search" data-f="q" value="' + esc(F.q) + '" placeholder="Buscar referencia, producto, responsable u observación" aria-label="Buscar">'
       + '<span class="count" aria-live="polite">' + filas.length + " de " + a.rows.length + "</span>"
-      + '<button class="linkbtn" data-act="limpiar">Limpiar</button><button class="linkbtn" data-act="csv">Descargar CSV</button></div>';
-    html += '<div class="tablewrap"><table><thead><tr><th scope="col">Ref.</th><th scope="col">Producto y requerimiento</th><th scope="col">Requirente</th><th scope="col">Responsable</th><th scope="col">Plazo</th><th scope="col">Entrega</th><th scope="col">Estado</th><th scope="col">Período</th></tr></thead><tbody>';
+      + '<button class="linkbtn" data-act="limpiar">Quitar filtros</button><button class="linkbtn" data-act="csv">Descargar lista (CSV para Excel)</button></div>';
+    html += '<div class="tablewrap"><table><thead><tr><th scope="col">Ref.</th><th scope="col">Producto y requerimiento</th><th scope="col">Requirente</th><th scope="col">Responsable</th><th scope="col">Plazo</th><th scope="col">Entrega</th><th scope="col">Estado</th><th scope="col">Movimiento</th></tr></thead><tbody>';
     html += filas.length ? filas.map(f => '<tr data-open="' + esc(f.id) + '" tabindex="0"><td class="nowrap mono">' + esc(f.id) + '</td><td><div class="cell-t">' + esc(f.product) + '</div><div class="cell-s">' + esc(f.request) + "</div></td><td>" + esc(f.requester)
       + "</td><td>" + esc(f.owner) + '</td><td class="nowrap tnum">' + (ft(f.due) || "—") + '</td><td class="nowrap tnum">' + (ft(f.delivered) || "—") + "</td><td>" + badge(f) + "</td><td>" + movChip(f) + "</td></tr>").join("")
       : '<tr><td colspan="8" class="empty-note">Sin registros para estos filtros.</td></tr>';
@@ -539,7 +624,7 @@
   }
 
   // ------------------------------------------------------------------ ficha de detalle
-  function abrirFicha(id) {
+  function abrirFicha(id, desdeHistorial) {
     const a = analisis();
     const f = a.rows.find(x => x.id === id);
     if (!f) return;
@@ -547,13 +632,16 @@
     const prev = (st.norm[st.cut].previousRows || []).find(x => x.id === id);
     const filas = [["Equipo", area.name], ["Fecha de ingreso", ft(f.received)], ["Requerimiento", f.request], ["Producto comprometido", f.product], ["Tipo de encargo", f.kind],
       ["Requirente", f.requester], ["Responsable", f.owner], ["Plazo acordado", ft(f.due) || "Sin plazo"], ["Estado", f.state], ["Entrega efectiva", ft(f.delivered) || "—"], ["Observaciones generales", f.notes || "—"]];
-    let html = '<div class="drawer-bg" data-close></div><aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="ficha-t"><div class="drawer__head"><div><div class="drawer__k">' + esc(f.id) + " · " + esc(area.name)
+    const destino = st.view === "compromisos" ? "Volver a la lista" : st.view === "minuta" ? "Volver a la minuta" : st.view === "calidad" ? "Volver" : "Volver al resumen";
+    let html = '<div class="drawer-bg" data-close></div><aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="ficha-t"><div class="drawer__head"><div style="min-width:0">'
+      + '<button class="drawer__back" data-close><span aria-hidden="true">←</span>' + destino + "</button>"
+      + '<div class="drawer__k">Ficha del compromiso · ' + esc(f.id) + " · " + esc(area.name)
       + '</div><div class="drawer__t" id="ficha-t">' + esc(f.product) + '</div><div style="margin-top:8px">' + badge(f) + " " + movChip(f) + (f.support ? ' <span class="chip ' + (f.decision ? "dec" : "apo") + '">' + (f.decision ? "Decisión de Gabinete" : "Apoyo de Gabinete") + "</span>" : "")
       + '</div></div><button class="drawer__close" data-close aria-label="Cerrar ficha">×</button></div><div class="drawer__body"><dl class="dl">'
       + filas.map(([k, v]) => "<dt>" + esc(k) + "</dt><dd>" + esc(v) + "</dd>").join("") + "</dl>";
     if (f.held) html += '<p class="empty-note">La fila tiene un error en el Excel; se muestra la versión del corte anterior.</p>';
     if (prev && f.changed.length) {
-      html += '<div class="sub">Cambios respecto del corte del ' + ft(st.norm[st.cut].from) + '</div><div class="diff">'
+      html += '<div class="sub">Qué cambió desde el corte del ' + ft(st.norm[st.cut].from) + '</div><div class="diff">'
         + f.changed.map(k => {
           const fecha = ["due", "received", "delivered"].includes(k);
           const v = x => (fecha ? ft(x) : x) || "(vacío)";
@@ -564,15 +652,35 @@
     if (hist.length > 1) {
       html += '<div class="sub">Historial en los cortes disponibles</div><div class="hist">' + hist.map(([c, r]) => "<div><strong>" + esc(etiquetaClave(c)) + "</strong> · " + esc(r.state) + (r.due ? " · plazo " + ft(r.due) : "") + (r.notes ? '<span class="cell-s" style="display:block">' + esc(r.notes) + "</span>" : "") + "</div>").join("") + "</div>";
     }
-    html += "</div></aside>";
-    const root = $("drawer-root");
-    const previo = document.activeElement;
-    root.innerHTML = html;
-    const cerrar = () => { root.innerHTML = ""; document.removeEventListener("keydown", tecla); if (previo && previo.focus) previo.focus(); };
-    const tecla = e => { if (e.key === "Escape") cerrar(); };
-    document.addEventListener("keydown", tecla);
-    for (const el of root.querySelectorAll("[data-close]")) el.addEventListener("click", cerrar);
-    root.querySelector(".drawer__close").focus();
+    html += '</div><div class="drawer__foot"><button class="backbtn" data-close><span aria-hidden="true">←</span>' + destino + "</button></div></aside>";
+    abrirPanel(html, "ficha", desdeHistorial, { ficha: id });
+  }
+
+  // ------------------------------------------------------------------ ayuda
+  function abrirAyuda(desdeHistorial) {
+    const html = '<div class="drawer-bg" data-close></div><aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="ayuda-t"><div class="drawer__head"><div>'
+      + '<button class="drawer__back" data-close><span aria-hidden="true">←</span>Volver al tablero</button>'
+      + '<div class="drawer__k">Ayuda</div><div class="drawer__t" id="ayuda-t">Cómo leer este tablero</div></div><button class="drawer__close" data-close aria-label="Cerrar ayuda">×</button></div>'
+      + '<div class="drawer__body help">'
+      + "<h3>De dónde salen los datos</h3><p>Los equipos registran sus compromisos en tres planillas Excel. Cada hora, de 8:00 a 19:00 y de lunes a viernes, se guarda una copia (una <strong>captura</strong>) y el tablero la lee sola.</p>"
+      + "<dl><dt>Corte semanal</dt><dd>La captura del <strong>viernes a las 12:00</strong>. Se compara con la del viernes anterior y con ella se arma la minuta para Gabinete.</dd>"
+      + "<dt>Actualización</dt><dd>La captura más reciente de la semana. Muestra lo que ha cambiado desde el último corte semanal.</dd></dl>"
+      + "<p style=\"margin-top:8px\">Para mirar otra semana, usa el selector <strong>«Ver datos de»</strong> arriba.</p>"
+      + "<h3>Qué significa cada número</h3><dl>"
+      + "<dt>Entregados</dt><dd>Compromisos que pasaron a «Entregado» en el período.</dd>"
+      + "<dt>Con avance</dt><dd>Compromisos que cambiaron algo (estado, plazo, observaciones u otro dato) sin entregarse todavía.</dd>"
+      + "<dt>Ingresos</dt><dd>Encargos nuevos registrados en el período.</dd>"
+      + "<dt>Atrasados o bloqueados</dt><dd>Abiertos con el plazo vencido, o que el equipo marcó como «Bloqueado».</dd>"
+      + "<dt>Requieren decisión o apoyo</dt><dd>El equipo pidió en Observaciones una decisión o una gestión de Gabinete.</dd>"
+      + "<dt>Próximos vencimientos</dt><dd>Compromisos abiertos que vencen en los próximos 7 días.</dd></dl>"
+      + "<h3>Cómo moverse</h3><ul>"
+      + "<li>Haz clic en cualquier número, equipo o fila para ver el detalle.</li>"
+      + "<li>Usa <strong>«← Volver»</strong> (arriba a la izquierda), la flecha atrás del navegador o la tecla <strong>Esc</strong> para regresar.</li>"
+      + "<li><strong>«↻ Actualizar»</strong> trae la captura más reciente. Si dejas la página abierta, se actualiza sola cada 30 minutos.</li>"
+      + "<li>La minuta en Word está en <strong>Minuta semanal › Descargar Word</strong>.</li></ul>"
+      + "<h3>Si algo se ve raro</h3><p>Los avisos amarillos o rojos bajo la barra superior explican qué pasa (por ejemplo, una captura que no llegó). El detalle técnico está en <strong>Estado de los datos</strong>.</p>"
+      + '</div><div class="drawer__foot"><button class="backbtn" data-close><span aria-hidden="true">←</span>Volver al tablero</button></div></aside>';
+    abrirPanel(html, "ayuda", desdeHistorial, { ayuda: true });
   }
 
   // ------------------------------------------------------------------ minuta
@@ -615,6 +723,11 @@
     let html = '<div class="toolbar no-print"><div class="seg" role="group" aria-label="Versión de la minuta"><button data-full="0" aria-pressed="' + !st.full + '">Ejecutiva (hasta 2 páginas)</button><button data-full="1" aria-pressed="' + st.full + '">Detalle completo</button></div>'
       + '<button class="btn primary" data-act="word">Descargar Word</button><button class="btn" data-act="copiar">Copiar texto</button><button class="btn" data-act="imprimir">Imprimir o PDF</button>'
       + '<span class="status-msg" id="minuta-status">Cifras: ' + s.ingresos + " ingresos · " + s.entregas + " entregas · " + s.avances + " avances · " + s.abiertos + " abiertos" + verificacion(corte, s) + "</span></div>";
+    if (esIntermedio(st.cut)) {
+      const semanal = cortesOrdenados().filter(k => !esIntermedio(k) && st.norm[k].status !== "en_revision").slice(-1)[0];
+      html += '<div class="context no-print"><div class="context__t"><span class="context__k">Ojo</span>Esta es una minuta de avance intermedio, no la minuta semanal oficial.</div>'
+        + (semanal ? '<button class="btn primary" data-act="ir-semanal" data-k="' + semanal + '">Ver la minuta del ' + esc(etiquetaClave(semanal).replace("Corte semanal · ", "corte del ")) + "</button>" : "") + "</div>";
+    }
     html += minutaHTML(m);
     if (st.full) {
       const movs = M.movimientos(modelo, corte);
@@ -662,7 +775,7 @@
       + "</div></section></div>";
     // Historial
     const cortes = cortesOrdenados().slice().reverse();
-    html += '<section class="card" style="margin-top:16px"><div class="card__head"><h2 class="card__title" style="margin:0">Historial de cortes</h2><span class="card__sub">' + cortes.length + ' disponibles</span></div><div class="card__body" style="padding:0"><div style="overflow:auto"><table><thead><tr><th>Corte</th><th>Estado</th><th>Ingresos</th><th>Entregas</th><th>Avances</th><th>Abiertos</th><th>Atrasados o bloqueados</th><th>Incidencias</th></tr></thead><tbody>'
+    html += '<section class="card" style="margin-top:16px"><div class="card__head"><h2 class="card__title" style="margin:0">Historial de cortes</h2><span class="card__sub">' + cortes.length + ' disponibles · clic en una fila para verla</span></div><div class="card__body" style="padding:0"><div style="overflow:auto"><table><thead><tr><th>Corte</th><th>Estado</th><th>Ingresos</th><th>Entregas</th><th>Avances</th><th>Abiertos</th><th>Atrasados o bloqueados</th><th>Incidencias</th></tr></thead><tbody>'
       + cortes.map(c => {
         const x = st.cache[c] || (st.cache[c] = M.analizar(modelo, st.norm[c]));
         const s = x.summary;
@@ -671,22 +784,23 @@
     // Carga manual
     if (st.origin === "carpeta" && st.carpeta) {
       const c = st.carpeta;
-      html += '<section class="card" style="margin-top:16px"><div class="card__head"><h2 class="card__title" style="margin:0">Carpeta de OneDrive</h2><span class="card__sub">' + M.plural(c.turnos.length, "captura") + '</span></div><div class="card__body"><dl class="kv">'
+      html += '<section class="card" style="margin-top:16px"><div class="card__head"><h2 class="card__title" style="margin:0">Capturas recibidas</h2><span class="card__sub">' + M.plural(c.turnos.length, "captura") + '</span></div><div class="card__body"><dl class="kv">'
         + "<dt>Carpeta</dt><dd>" + esc(c.nombre || "seleccionada") + "</dd>"
-        + "<dt>Leída</dt><dd>" + esc(momentoTexto(c.leidaEn)) + "</dd>"
+        + "<dt>Revisada</dt><dd>" + esc(momentoTexto(c.leidaEn)) + "</dd>"
         + "<dt>Primera captura</dt><dd>" + esc(M.momentoSlot(c.turnos[0])) + "</dd>"
         + "<dt>Última captura</dt><dd>" + esc(M.momentoSlot(c.turnos[c.turnos.length - 1])) + "</dd>"
         + "<dt>Cortes semanales</dt><dd>" + cortesOrdenados().filter(k => !esIntermedio(k)).length + "</dd>"
         + "</dl>" + (c.errores.length ? '<ul class="inc" style="margin-top:10px">' + c.errores.map(e => '<li><span class="lvl bloqueante">Error</span><span>' + esc(e) + "</span></li>").join("") + "</ul>" : "")
-        + '<div class="toolbar" style="margin-top:12px"><button class="btn primary" data-act="actualizar">Actualizar ahora</button><button class="btn" data-act="carpeta">Cambiar carpeta</button></div></div></section>';
+        + '<div class="toolbar" style="margin-top:12px"><button class="btn primary" data-act="actualizar">↻ Actualizar ahora</button>' + (st.automatico ? "" : '<button class="btn" data-act="carpeta">Cambiar carpeta</button>') + "</div></div></section>";
     }
     const puedeGuardar = st.manual.has(st.cut) && corte.status !== "en_revision";
-    html += '<section class="card" style="margin-top:16px"><div class="card__head"><h2 class="card__title" style="margin:0">Carga manual (respaldo)</h2><span class="card__sub">para pruebas o si la automatización no corre</span></div><div class="card__body">'
+    html += '<details class="adv"' + (st.manual.size || st.origin === "manual" ? " open" : "") + '><summary>Opciones avanzadas: carga manual de respaldo (solo si la captura automática falla)</summary>'
+      + '<section class="card"><div class="card__head"><h2 class="card__title" style="margin:0">Carga manual (respaldo)</h2><span class="card__sub">para pruebas o si la automatización no corre</span></div><div class="card__body">'
       + '<p style="margin:0 0 12px;font-size:13px;color:var(--ink-2)">Selecciona las tres copias de los Excel tomadas al corte del viernes a las 12:00. El tablero las compara con el último corte válido cargado anterior a esa fecha y genera la misma minuta que la automatización.</p>'
       + '<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:end"><label class="field">Fecha de corte (viernes)<input type="date" id="manual-cut" value="' + corteEsperado() + '"></label>'
       + '<div class="drop" id="drop" style="flex:1;min-width:260px">Arrastra aquí los tres Excel o <button class="linkbtn" data-act="xlsx">selecciónalos</button></div></div>'
       + '<div class="toolbar" style="margin-top:12px"><button class="btn" data-act="json">Abrir consolidado (.json)</button><button class="btn" data-act="guardar"' + (puedeGuardar ? "" : " disabled") + '>Guardar consolidado del corte seleccionado</button><span class="status-msg" id="manual-status">'
-      + (st.manual.has(st.cut) && !puedeGuardar ? "El corte está en revisión: corrige las incidencias antes de guardarlo." : "") + "</span></div></div></section>";
+      + (st.manual.has(st.cut) && !puedeGuardar ? "El corte está en revisión: corrige las incidencias antes de guardarlo." : "") + "</span></div></div></section></details>";
     return html;
   }
 
@@ -739,10 +853,13 @@
     const act = e.currentTarget.dataset.act;
     if (act === "carpeta") conectarCarpeta();
     else if (act === "carpeta-alt") $("file-dir").click();
-    else if (act === "actualizar") actualizarCarpeta();
+    else if (act === "actualizar") refrescar();
+    else if (act === "volver") volver();
+    else if (act === "reintentar") { estadoCarpeta("Buscando capturas…"); if (!(await cargarAutomatico())) { render(); estadoCarpeta("Sigo sin encontrar capturas junto a este archivo.", "warn"); } }
+    else if (act === "ir-semanal") { st.cut = e.currentTarget.dataset.k; render(); window.scrollTo(0, 0); }
     else if (act === "xlsx") $("file-xlsx").click();
     else if (act === "json") $("file-json").click();
-    else if (act === "limpiar") { st.filters = Object.assign({}, FILTROS_VACIOS); render(); }
+    else if (act === "limpiar") ir({ view: "compromisos", filters: FILTROS_VACIOS });
     else if (act === "csv") csv();
     else if (act === "imprimir") window.print();
     else if (act === "copiar") {
@@ -765,15 +882,16 @@
       b.addEventListener("click", () => abrirFicha(b.dataset.open));
       if (b.tagName === "TR") b.addEventListener("keydown", e => { if (e.key === "Enter") abrirFicha(b.dataset.open); });
     }
-    for (const b of page.querySelectorAll("[data-preset]")) b.addEventListener("click", () => { st.filters = Object.assign({}, FILTROS_VACIOS, { view: b.dataset.preset }); st.view = "compromisos"; render(); });
-    for (const b of page.querySelectorAll("[data-area]")) b.addEventListener("click", () => { st.filters = Object.assign({}, FILTROS_VACIOS, { area: b.dataset.area, view: "abiertos" }); st.view = "compromisos"; render(); });
+    for (const b of page.querySelectorAll("[data-preset]")) b.addEventListener("click", () => ir({ view: "compromisos", filters: { view: b.dataset.preset } }));
+    for (const b of page.querySelectorAll("[data-area]")) b.addEventListener("click", () => ir({ view: "compromisos", filters: { area: b.dataset.area, view: "abiertos" } }));
     for (const b of page.querySelectorAll("[data-full]")) b.addEventListener("click", () => { st.full = b.dataset.full === "1"; render(); });
-    for (const r of page.querySelectorAll("tr[data-cut]")) r.addEventListener("click", () => { st.cut = r.dataset.cut; render(); });
+    for (const r of page.querySelectorAll("tr[data-cut]")) r.addEventListener("click", () => { st.cut = r.dataset.cut; ir({ view: "resumen" }); });
     for (const el of page.querySelectorAll("[data-f]")) {
       const ev = el.tagName === "INPUT" ? "input" : "change";
       el.addEventListener(ev, () => {
         st.filters[el.dataset.f] = el.value;
         const pos = el.selectionStart;
+        if (history.state && history.state.depp) history.replaceState(estadoNav(), "", location.hash);
         render();
         if (el.tagName === "INPUT") { const n = $("page").querySelector('[data-f="q"]'); n.focus(); n.setSelectionRange(pos, pos); }
       });
@@ -786,10 +904,29 @@
     }
   }
 
+  /** Botón «↻ Actualizar»: vuelve a leer las capturas sin recargar la página. */
+  async function refrescar() {
+    const b = $("btn-actualizar");
+    b.disabled = true; b.textContent = "Actualizando…";
+    try {
+      if (st.automatico) { st.cutPrevio = st.cut; await cargarAutomatico(); }
+      else await actualizarCarpeta();
+    } finally { b.disabled = false; b.textContent = "↻ Actualizar"; }
+  }
+
   // ------------------------------------------------------------------ arranque
   async function iniciar() {
-    $("version-label").textContent = "Versión 1.0 · formato " + M.FORMATO;
-    for (const b of document.querySelectorAll(".nav__item")) b.addEventListener("click", () => { st.view = b.dataset.view; render(); $("page").focus && window.scrollTo(0, 0); });
+    $("version-label").textContent = "Versión 1.1 · formato " + M.FORMATO;
+    for (const b of document.querySelectorAll(".nav__item")) b.addEventListener("click", () => { if (b.dataset.view !== st.view || st.panel) ir({ view: b.dataset.view }); });
+    $("logo-inicio").addEventListener("click", () => ir({ view: "resumen", filters: FILTROS_VACIOS }));
+    $("btn-volver").addEventListener("click", volver);
+    $("btn-ayuda").addEventListener("click", () => { if (st.panel !== "ayuda") abrirAyuda(); });
+    window.addEventListener("popstate", alVolverHistorial);
+    document.addEventListener("keydown", e => { if (e.key === "Escape" && st.panel) cerrarPanelUsuario(); });
+    // Al abrir (o recargar) se parte en la sección que indique la dirección, p. ej. …/Tablero_DEPP.html#minuta.
+    const inicial = location.hash.slice(1);
+    if (VISTAS[inicial]) st.view = inicial;
+    history.replaceState(Object.assign(estadoNav(), { i: 0 }), "", location.hash || "#" + st.view);
     $("cut-select").addEventListener("change", e => { st.cut = e.target.value; render(); });
     $("file-xlsx").addEventListener("change", e => { const fs = Array.from(e.target.files); e.target.value = ""; if (fs.length) cargarExcel(fs); });
     $("file-json").addEventListener("change", e => { const f = e.target.files[0]; e.target.value = ""; if (f) abrirJSON(f); });
@@ -802,10 +939,11 @@
       try { await procesarCapturas(entradasDesdeLista(fs), nombre); }
       catch (err) { console.error(err); estadoCarpeta(err.message, "bad"); }
     });
-    $("btn-actualizar").addEventListener("click", () => { if (st.automatico) { st.cutPrevio = st.cut; cargarAutomatico(); } else actualizarCarpeta(); });
+    $("btn-actualizar").addEventListener("click", refrescar);
     if (embebidos) cargarEmbebidos(embebidos);
     else if (/^https?:$/.test(location.protocol) && await cargarRemoto()) { /* datos publicados en el servidor */ }
     else if (location.protocol === "file:" && await cargarAutomatico()) return;
+    else if (location.protocol === "file:" && /(\/Capturas\/|Tablero_DEPP\.html$)/i.test(decodeURIComponent(location.pathname))) st.sinCapturas = true;
     else {
       const h = await idb.get("carpeta");
       if (h && h.queryPermission) {
