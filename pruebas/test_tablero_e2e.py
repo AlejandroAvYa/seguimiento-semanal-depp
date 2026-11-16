@@ -288,3 +288,18 @@ def test_tablero_sin_capturas_explica_que_revisar(navegador, tmp_path):
     texto = pg.locator("#page").inner_text()
     assert "Aún no hay datos para mostrar" in texto and "Mantener siempre en este dispositivo" in texto
     assert not errores
+
+
+def test_captura_rapida_en_ultima(navegador, tmp_path):
+    """«ultima/datos.js» (captura cada 5 minutos, sobrescrita) se usa como la actualización más reciente."""
+    capturas = tmp_path / "Capturas"
+    shutil.copytree(CAPTURAS, capturas)
+    shutil.copy(RAIZ / "docs" / "Tablero_DEPP.html", capturas / "Tablero_DEPP.html")
+    (capturas / "ultima").mkdir()
+    texto = (capturas / "2026-11-13_1700" / "datos.js").read_text(encoding="utf-8")
+    (capturas / "ultima" / "datos.js").write_text(texto.replace('"turno":"2026-11-13_1700"', '"turno":"2026-11-13_1735"'), encoding="utf-8")
+    pg, errores = pagina(navegador, (capturas / "Tablero_DEPP.html").as_uri() + "?ahora=2026-11-13T17:40")
+    pg.wait_for_timeout(3000)
+    assert pg.locator("#cut-select").input_value() == "2026-11-13_1735"
+    assert "17:35" in pg.locator("#update-label").inner_text()
+    assert not errores

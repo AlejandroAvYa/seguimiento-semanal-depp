@@ -1403,12 +1403,16 @@ details.adv>summary:hover{color:var(--c-blue-700)}
   /** Lee los datos.js que deja el flujo junto a cada captura. Devuelve false si no encontró ninguno. */
   async function cargarAutomatico() {
     window.DEPP_CAPTURAS = [];
-    const candidatos = turnosCandidatos();
+    // Además de las capturas horarias, «ultima/datos.js» es la captura rápida (cada 5 minutos) que el flujo sobrescribe.
+    const candidatos = turnosCandidatos().concat(["ultima"]);
     estadoCarpeta("Buscando capturas en la carpeta…");
     for (let i = 0; i < candidatos.length; i += 12) {
       await Promise.all(candidatos.slice(i, i + 12).map(t => cargarScript(t + "/datos.js?v=" + Date.now())));
     }
-    const capturas = (window.DEPP_CAPTURAS || []).filter(c => c && RE_TURNO.test(c.turno || "") && Array.isArray(c.archivos));
+    // Si dos capturas tienen el mismo turno (la horaria y la rápida de la misma hora), basta una.
+    const porTurno = new Map();
+    for (const c of window.DEPP_CAPTURAS || []) if (c && RE_TURNO.test(c.turno || "") && Array.isArray(c.archivos) && c.archivos.length) porTurno.set(c.turno, c);
+    const capturas = Array.from(porTurno.values());
     if (!capturas.length) { $("banners").innerHTML = ""; return false; }
     const entradas = [];
     for (const c of capturas) {
@@ -1425,7 +1429,7 @@ details.adv>summary:hover{color:var(--c-blue-700)}
     st.automatico = true;
     st.sinCapturas = false;
     render();
-    if (!st.refrescoAuto) st.refrescoAuto = setInterval(() => { st.cutPrevio = st.cut; cargarAutomatico(); }, 30 * 60000);
+    if (!st.refrescoAuto) st.refrescoAuto = setInterval(() => { st.cutPrevio = st.cut; cargarAutomatico(); }, 10 * 60000);
     return true;
   }
 
@@ -1769,7 +1773,7 @@ details.adv>summary:hover{color:var(--c-blue-700)}
       + '<button class="drawer__back" data-close><span aria-hidden="true">←</span>Volver al tablero</button>'
       + '<div class="drawer__k">Ayuda</div><div class="drawer__t" id="ayuda-t">Cómo leer este tablero</div></div><button class="drawer__close" data-close aria-label="Cerrar ayuda">×</button></div>'
       + '<div class="drawer__body help">'
-      + "<h3>De dónde salen los datos</h3><p>Los equipos registran sus compromisos en tres planillas Excel. Cada hora, de 8:00 a 19:00 y de lunes a viernes, se guarda una copia (una <strong>captura</strong>) y el tablero la lee sola.</p>"
+      + "<h3>De dónde salen los datos</h3><p>Los equipos registran sus compromisos en tres planillas Excel. Cada 5 minutos, de 8:00 a 19:00 y de lunes a viernes, se guarda una copia al día (una <strong>captura</strong>) y el tablero la lee sola. Además, cada hora queda una copia fija para el historial.</p>"
       + "<dl><dt>Corte semanal</dt><dd>La captura del <strong>viernes a las 12:00</strong>. Se compara con la del viernes anterior y con ella se arma la minuta para Gabinete.</dd>"
       + "<dt>Actualización</dt><dd>La captura más reciente de la semana. Muestra lo que ha cambiado desde el último corte semanal.</dd></dl>"
       + "<p style=\"margin-top:8px\">Para mirar otra semana, usa el selector <strong>«Ver datos de»</strong> arriba.</p>"
@@ -1783,7 +1787,7 @@ details.adv>summary:hover{color:var(--c-blue-700)}
       + "<h3>Cómo moverse</h3><ul>"
       + "<li>Haz clic en cualquier número, equipo o fila para ver el detalle.</li>"
       + "<li>Usa <strong>«← Volver»</strong> (arriba a la izquierda), la flecha atrás del navegador o la tecla <strong>Esc</strong> para regresar.</li>"
-      + "<li><strong>«↻ Actualizar»</strong> trae la captura más reciente. Si dejas la página abierta, se actualiza sola cada 30 minutos.</li>"
+      + "<li><strong>«↻ Actualizar»</strong> trae la captura más reciente. Si dejas la página abierta, se actualiza sola cada 10 minutos.</li>"
       + "<li>La minuta en Word está en <strong>Minuta semanal › Descargar Word</strong>.</li></ul>"
       + "<h3>Si algo se ve raro</h3><p>Los avisos amarillos o rojos bajo la barra superior explican qué pasa (por ejemplo, una captura que no llegó). El detalle técnico está en <strong>Estado de los datos</strong>.</p>"
       + '</div><div class="drawer__foot"><button class="backbtn" data-close><span aria-hidden="true">←</span>Volver al tablero</button></div></aside>';
